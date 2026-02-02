@@ -59,7 +59,7 @@
 在青龙面板 **订阅管理** 中添加：
 
 ```
-https://github.com/你的账号/ComicsPuncher.git
+https://github.com/anchengxiake/ql-checkin.git
 ```
 
 #### 方法二：手动上传
