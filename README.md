@@ -1,12 +1,13 @@
 #  综合签到脚本集合
 
-多平台自动签到脚本集合，完全支持[青龙面板](https://github.com/whyour/qinglong)，包含漫画、网盘、宽带等多种服务的自动签到。
+多平台自动签到脚本集合，完全支持[青龙面板](https://github.com/whyour/qinglong)，包含漫画、网盘、宽带、论坛等多种服务的自动签到。
 
 ## 📋 支持平台
 
 - 🎭 **漫画平台**：哔咔漫画、禁漫天堂
 - 💾 **网盘平台**：夸克网盘、阿里云盘、百度网盘、天翼云盘
 - 🌐 **宽带服务**：IKUAI 宽带签到
+- 📝 **论坛社区**：老王论坛
 - 🔄 **持续更新**：更多平台支持中...
 
 ## 🌟 特性
@@ -19,8 +20,10 @@
   - 阿里云盘签到（aliyunpan_checkin.py）
   - 百度网盘签到（baiduwangpan_checkin.py）
   - 天翼云盘签到（ty_netdisk_checkin.py）
-- ✅ **其他服务**
+- ✅ **宽带服务**
   - IKUAI 签到（ikuuu_checkin.py）
+- ✅ **论坛社区**
+  - 老王论坛自动签到（laowang-auto-signup-v2.py）
 - ✅ 支持多账号管理
 - ✅ 支持随机延迟执行
 - ✅ 支持推送通知（Server酱、PushPlus、Telegram、钉钉）
@@ -37,6 +40,7 @@
 | `baiduwangpan_checkin.py` | 百度网盘签到脚本 | 网盘 | `BAIDU_COOKIE` |
 | `ty_netdisk_checkin.py` | 天翼云盘签到脚本 | 网盘 | `TY_USERNAME` + `TY_PASSWORD` |
 | `ikuuu_checkin.py` | IKUAI 签到脚本 | 其他 | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
+| `laowang-auto-signup-v2.py` | 老王论坛签到脚本 | 论坛 | `LAOWANG_COOKIE` |
 
 所有脚本都可以独立在青龙面板中运行，支持环境变量配置和推送通知。
 
@@ -50,6 +54,8 @@
 |-----|---------|---------|
 | 漫画签到 | `pica_punch.py` + `jm_punch.py` | `PICA_ACCOUNT`, `JM_ACCOUNT` |
 | 网盘签到 | `quark_punch.py` + `aliyunpan_checkin.py` + `baiduwangpan_checkin.py` + `ty_netdisk_checkin.py` | `COOKIE_QUARK`, `ALIYUN_REFRESH_TOKEN`, `BAIDU_COOKIE`, `TY_USERNAME`+`TY_PASSWORD` |
+| 宽带签到 | `ikuuu_checkin.py` | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
+| 论坛签到 | `laowang-auto-signup-v2.py` | `LAOWANG_ACCOUNT` |
 | 全平台签到 | 全部脚本 | 对应环境变量 |
 
 ### 2. 部署到青龙面板
@@ -74,13 +80,13 @@ https://github.com/anchengxiake/ql-checkin.git
 
 为每个脚本创建对应的定时任务（见下文定时任务配置）。
 
-### 2. 配置环境变量
+## 🔧 详细配置
 
-在青龙面板 **环境变量** 中添加：
+### 环境变量配置
 
 #### 哔咔漫画
 
-```
+```bash
 # 推荐：多账号格式（用 & 或换行分隔）
 PICA_ACCOUNT=user1@example.com:pass1&user2@example.com:pass2
 
@@ -94,7 +100,7 @@ PICA_PW=password
 
 #### 禁漫天堂
 
-```
+```bash
 # 推荐：多账号格式（用 & 或换行分隔）
 JM_ACCOUNT=user1:pass1&user2:pass2
 
@@ -108,18 +114,18 @@ JM_PW=password
 
 #### 夸克网盘
 
-```
+```bash
 # Cookie格式（从浏览器开发者工具获取）
 COOKIE_QUARK=kps=xxx;sign=xxx;vcode=xxx;user=用户名
 
-# 多账号（用换行分隔）
+# 多账号（用换行或 && 分隔）
 COOKIE_QUARK=cookie1
 cookie2
 ```
 
 #### 阿里云盘
 
-```
+```bash
 # 单账号（refresh_token）
 ALIYUN_REFRESH_TOKEN=your_refresh_token
 
@@ -131,7 +137,7 @@ token3
 
 #### 百度网盘
 
-```
+```bash
 # Cookie格式
 BAIDU_COOKIE=your_baidu_cookie
 
@@ -142,8 +148,8 @@ cookie2
 
 #### 天翼云盘
 
-```
-# 账号密码格式
+```bash
+# 账号密码格式（用 & 分隔多账号）
 TY_USERNAME=username1&username2
 TY_PASSWORD=password1&password2
 
@@ -154,8 +160,8 @@ TY_PASSWORD=password
 
 #### IKUAI 宽带
 
-```
-# 邮箱密码格式
+```bash
+# 邮箱密码格式（用逗号分隔多账号）
 IKUUU_EMAIL=user1@example.com,user2@example.com
 IKUUU_PASSWD=password1,password2
 
@@ -164,15 +170,41 @@ IKUUU_EMAIL=user@example.com
 IKUUU_PASSWD=password
 ```
 
+#### 老王论坛
+
+```bash
+# Cookie 格式（推荐）
+LAOWANG_COOKIE=your_cookie_here
+
+# 多账号用 & 或换行分隔
+LAOWANG_COOKIE=cookie1&cookie2
+```
+
+> 💡 **轻量版说明**：使用 Cookie 模式签到，无需安装浏览器，资源占用极低
+>
+> **获取 Cookie 方法：**
+> 1. 浏览器登录老王论坛
+> 2. F12 → Network → 任意请求 → Request Headers → 复制 Cookie
+> 3. 添加到环境变量 `LAOWANG_COOKIE`
+>
+> Cookie 有效期较长，失效后重新获取即可
+
 #### 可选配置
 
-```
+```bash
 # 代理（国内需要）
 MY_PROXY=http://127.0.0.1:7890
 
 # 随机延迟（避免同时执行）
 RANDOM_SIGNIN=true                    # 是否启用随机延迟，默认true
 MAX_RANDOM_DELAY=3600                 # 最大随机延迟时间（秒），默认3600秒（1小时）
+
+# 隐私模式
+PRIVACY_MODE=true                     # 是否启用隐私保护（脱敏显示账号信息），默认true
+
+# 阿里云盘专用
+AUTO_UPDATE_TOKEN=true                # 是否自动更新refresh_token，默认true
+SHOW_TOKEN_IN_NOTIFICATION=false      # 通知中是否显示token，默认false
 
 # 推送通知
 PUSH_KEY=SCT开头的key              # Server酱
@@ -183,98 +215,22 @@ DD_BOT_TOKEN=token               # 钉钉
 DD_BOT_SECRET=secret
 ```
 
-```
-# Cookie格式
-IKUUU_COOKIE=your_ikuuu_cookie
-```
-
-#### 可选配置
-
-```
-# 代理（国内需要）
-MY_PROXY=http://127.0.0.1:7890
-
-# 随机延迟（避免同时执行）
-RANDOM_SIGNIN=true                    # 是否启用随机延迟，默认true
-MAX_RANDOM_DELAY=3600                 # 最大随机延迟时间（秒），默认3600秒（1小时）
-
-# 推送通知
-PUSH_KEY=SCT开头的key              # Server酱
-PUSH_PLUS_TOKEN=token            # PushPlus
-TG_BOT_TOKEN=token               # Telegram
-TG_USER_ID=user_id
-DD_BOT_TOKEN=token               # 钉钉
-DD_BOT_SECRET=secret
-```
-
-### 3. 创建定时任务
+### 定时任务配置
 
 在青龙面板 **定时任务** 中创建：
 
-**哔咔签到：**
+| 任务名称 | 脚本路径 | Cron表达式 | 任务类型 |
+|---------|---------|-----------|---------|
+| 哔咔签到 | `/ql/scripts/pica_punch.py` | `30 8 * * *` | Python |
+| 禁漫签到 | `/ql/scripts/jm_punch.py` | `30 8 * * *` | Python |
+| 夸克网盘签到 | `/ql/scripts/quark_punch.py` | `13 8 * * *` | Python |
+| 阿里云盘签到 | `/ql/scripts/aliyunpan_checkin.py` | `3 11 * * *` | Python |
+| 百度网盘签到 | `/ql/scripts/baiduwangpan_checkin.py` | `0 9 * * *` | Python |
+| 天翼云盘签到 | `/ql/scripts/ty_netdisk_checkin.py` | `1 16 * * *` | Python |
+| IKUAI签到 | `/ql/scripts/ikuuu_checkin.py` | `0 21 * * *` | Python |
+| 老王论坛签到 | `/ql/scripts/laowang-auto-signup-v2.py` | `0 9 * * *` | Python |
 
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 哔咔签到 |
-| 脚本路径 | `/ql/scripts/pica_punch.py` |
-| Cron表达式 | `30 8 * * *` |
-| 任务类型 | Python |
-
-**禁漫签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 禁漫签到 |
-| 脚本路径 | `/ql/scripts/jm_punch.py` |
-| Cron表达式 | `30 8 * * *` |
-| 任务类型 | Python |
-
-**夸克网盘签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 夸克网盘签到 |
-| 脚本路径 | `/ql/scripts/quark_punch.py` |
-| Cron表达式 | `0 9 * * *` |
-| 任务类型 | Python |
-
-**阿里云盘签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 阿里云盘签到 |
-| 脚本路径 | `/ql/scripts/aliyunpan_checkin.py` |
-| Cron表达式 | `3 11 * * *` |
-| 任务类型 | Python |
-
-**百度网盘签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 百度网盘签到 |
-| 脚本路径 | `/ql/scripts/baiduwangpan_checkin.py` |
-| Cron表达式 | `0 9 * * *` |
-| 任务类型 | Python |
-
-**天翼云盘签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | 天翼云盘签到 |
-| 脚本路径 | `/ql/scripts/ty_netdisk_checkin.py` |
-| Cron表达式 | `30 8 * * *` |
-| 任务类型 | Python |
-
-**IKUAI签到：**
-
-| 字段 | 值 |
-|-----|-----|
-| 任务名称 | IKUAI签到 |
-| 脚本路径 | `/ql/scripts/ikuuu_checkin.py` |
-| Cron表达式 | `0 8 * * *` |
-| 任务类型 | Python |
-
-## 📝 Cron 表达式
+### Cron 表达式参考
 
 ```
 30 8 * * *     # 每天8:30
@@ -291,13 +247,27 @@ DD_BOT_SECRET=secret
 # 方式1：使用 & 分隔（推荐）
 PICA_ACCOUNT=user1:pass1&user2:pass2&user3:pass3
 JM_ACCOUNT=user1:pass1&user2:pass2&user3:pass3
+LAOWANG_ACCOUNT=user1:pass1&user2:pass2
 
 # 方式2：使用换行分隔
 PICA_ACCOUNT=user1:pass1
 user2:pass2
 user3:pass3
 
-# 兼容：单账号旧格式
+# 网盘类Cookie多账号（换行分隔）
+COOKIE_QUARK=cookie1
+cookie2
+cookie3
+
+# 天翼云盘（&分隔）
+TY_USERNAME=username1&username2
+TY_PASSWORD=password1&password2
+
+# IKUAI（逗号分隔）
+IKUUU_EMAIL=user1@example.com,user2@example.com
+IKUUU_PASSWD=password1,password2
+
+# 兼容旧格式（单账号）
 PICA_USER=user@example.com
 PICA_PW=password
 JM_USER=username
@@ -349,29 +319,34 @@ A: 不同平台获取认证信息的方法：
 - 访问夸克网盘网页版（quark.cn）
 - 按F12打开开发者工具 → Application → Cookies
 - 复制相关cookie参数，格式：`kps=xxx;sign=xxx;vcode=xxx;user=用户名`
-- 多个账号用换行分隔
+- 多个账号用换行或 `&&` 分隔
 
 **阿里云盘（ALIYUN_REFRESH_TOKEN）**：
 - 访问阿里云盘网页版（aliyundrive.com）
 - 按F12打开开发者工具 → Application → Local Storage
 - 找到token项，复制refresh_token的值
-- 多个账号用换行分隔
+- 多个账号用换行或 `&` 分隔
 
 **百度网盘（BAIDU_COOKIE）**：
 - 访问百度网盘网页版（pan.baidu.com）
 - 按F12打开开发者工具 → Application → Cookies  
-- 复制BDUSS等关键cookie参数
+- 复制完整的Cookie值
 - 多个账号用换行分隔
 
 **天翼云盘（TY_USERNAME + TY_PASSWORD）**：
 - 访问天翼云盘网页版（cloud.189.cn）
 - 使用注册的账号密码
-- 多个账号用 & 分隔：`用户名1&用户名2` 和 `密码1&密码2`
+- 多个账号用 `&` 分隔：`用户名1&用户名2` 和 `密码1&密码2`
 
-**IKUAI宽带（IKUUU_EMAIL + IKUUI_PASSWD）**：
+**IKUAI宽带（IKUUU_EMAIL + IKUUU_PASSWD）**：
 - 访问IKUAI官网注册账号
 - 使用邮箱和密码登录
 - 多个账号用逗号分隔：`邮箱1,邮箱2` 和 `密码1,密码2`
+
+**老王论坛（LAOWANG_ACCOUNT）**：
+- 访问老王论坛（laowang.vip）注册账号
+- 格式：`用户名:密码` 或 `用户名:密码&用户名2:密码2`
+- 兼容格式：`LAOWANG_USER=用户名` + `LAOWANG_PW=密码`
 
 ### Q: 账号登录失败？
 
@@ -381,6 +356,30 @@ A:
 3. 检查账号是否被锁定
 4. 查看青龙面板的任务日志了解具体错误信息
 
+### Q: 老王论坛签到失败？
+
+A:
+1. 检查 Cookie 是否失效（Cookie 通常有效期较长，失效后重新获取）
+2. 确认 Cookie 格式正确（完整的 Cookie 字符串）
+3. 如果提示需要滑块验证，先在网页上手动签到一次后再试
+4. 检查网络连接是否正常
+
+### Q: 如何获取老王论坛 Cookie？
+
+A:
+
+1. **登录论坛：** 用浏览器访问 https://laowang.vip 并登录
+
+2. **打开开发者工具：** 按 F12 → 切换到 **Network（网络）** 标签页
+
+3. **刷新页面：** 按 F5 刷新，找到任意请求（如 `sign` 或 `index`）
+
+4. **复制 Cookie：** 点击请求 → Headers → Request Headers → 复制 Cookie 的值
+
+5. **添加到青龙：** 创建环境变量 `LAOWANG_COOKIE`，粘贴 Cookie 值
+
+> 💡 **提示**：Cookie 通常很长，包含 `__cfduid`、`auth` 等字段，确保完整复制
+
 ### Q: 多账号只有一个生效？
 
 A: 检查账号分隔符是否正确：
@@ -388,6 +387,7 @@ A: 检查账号分隔符是否正确：
 # ✅ 正确的新格式
 PICA_ACCOUNT=user1:pass1&user2:pass2
 JM_ACCOUNT=user1:pass1&user2:pass2
+LAOWANG_ACCOUNT=user1:pass1&user2:pass2
 
 # ✅ 正确的换行格式
 PICA_ACCOUNT=user1:pass1
@@ -424,6 +424,16 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 
 ##  更新日志
 
+### v2.2.1 (2024-02-XX)
+- 🚀 老王论坛改为轻量版（Cookie模式），无需浏览器
+- 💾 大幅降低资源占用，适合低配设备
+- 📖 更新 Cookie 获取教程
+
+### v2.2.0 (2024-02-XX)
+- ✨ 新增老王论坛自动签到脚本
+- 🐛 修复多账号分隔符兼容问题
+- 📱 优化通知格式
+
 ### v2.1.0 (2024-02-XX)
 - ✨ 新增夸克网盘签到脚本
 - 🔄 完善所有脚本的随机延迟功能
@@ -456,7 +466,7 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 
 ### 📚 参考项目
 - **[pica-go](https://github.com/niuhuan/pica-go)** - 哔咔漫画API参考
-- **[Quark_Auot_Check_In](https://github.com/Quark_Auot_Check_In)** - 夸克网盘签到脚本
+- **[Quark_Auot_CheckIn](https://github.com/Quark_Auot_Check_In)** - 夸克网盘签到脚本
 - **[aliyunpan](https://github.com/liupan1890/aliyunpan)** - 阿里云盘相关项目
 - **[baiduwp-php](https://github.com/yuantuo666/baiduwp-php)** - 百度网盘相关项目
 
