@@ -1,4 +1,4 @@
-# ComicsPuncher 综合签到脚本集合
+#  综合签到脚本集合
 
 多平台自动签到脚本集合，完全支持[青龙面板](https://github.com/whyour/qinglong)，包含漫画、网盘、宽带等多种服务的自动签到。
 
@@ -59,7 +59,7 @@
 在青龙面板 **订阅管理** 中添加：
 
 ```
-https://github.com/你的账号/ComicsPuncher.git
+https://github.com/anchengxiake/ql-checkin.git
 ```
 
 #### 方法二：手动上传
