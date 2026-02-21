@@ -366,7 +366,7 @@ class LaowangBrowserSign:
         try:
             # 先访问基础域名
             self.page.get(BASE_URL)
-            time.sleep(1)
+            time.sleep(2)
             
             # 解析并设置 Cookie
             cookie_str = self.cookie.strip()
@@ -375,23 +375,33 @@ class LaowangBrowserSign:
             else:
                 parts = re.split(r'[;&]', cookie_str)
             
+            success_count = 0
             for part in parts:
                 part = part.strip()
                 if '=' in part:
                     key, value = part.split('=', 1)
                     key = key.strip()
                     value = value.strip()
-                    if key and value and key not in ['path', 'domain', 'expires', 'HttpOnly', 'Secure', 'SameSite']:
+                    # 跳过无效键名和HTTP属性
+                    if key and value and key.lower() not in ['path', 'domain', 'expires', 'httponly', 'secure', 'samesite', 'max-age']:
                         try:
-                            self.page.set_cookies({
-                                'name': key,
-                                'value': value,
-                                'domain': '.laowang.vip'
-                            })
+                            # 尝试多种域名格式
+                            domains = ['.laowang.vip', 'laowang.vip']
+                            for domain in domains:
+                                try:
+                                    # DrissionPage 使用 add_cookie
+                                    self.page.add_cookie(key, value, domain=domain)
+                                    success_count += 1
+                                    break
+                                except:
+                                    continue
                         except:
                             pass
             
-            return True
+            logger.info(f"✅ 已设置 {success_count} 个 Cookie")
+            
+            # 设置后直接访问签到页面验证
+            return success_count > 0
             
         except Exception as e:
             logger.error(f"❌ 设置 Cookie 失败: {e}")
@@ -431,6 +441,17 @@ class LaowangBrowserSign:
             
             # 查找签到按钮
             try:
+                # 保存页面截图用于调试
+                try:
+                    self.page.get_screenshot(path=f'/tmp/laowang_page_{self.index}.png', full_page=True)
+                    logger.info(f"📸 页面截图已保存到 /tmp/laowang_page_{self.index}.png")
+                except:
+                    pass
+                
+                # 输出页面部分内容用于调试
+                page_html = self.page.html
+                logger.debug(f"页面HTML前2000字符: {page_html[:2000]}")
+                
                 # 尝试多种选择器
                 sign_selectors = [
                     'css:a.J_chkitot',
@@ -438,54 +459,161 @@ class LaowangBrowserSign:
                     'css:#fx_checkin_b a',
                     'css:.btn.J_chkitot',
                     'css:a[href*="operation=qiandao"]',
+                    'css:button.J_chkitot',
+                    'css:.J_chkitot',
+                    'css:.checkin-btn',
+                    'css:#k_misign_signbtn a',
+                    'css:.sign-btn',
+                    'css:a:contains(签到)',
+                    'css:button:contains(签到)',
                 ]
                 
                 sign_btn = None
+                used_selector = None
                 for selector in sign_selectors:
                     try:
                         sign_btn = self.page.ele(selector, timeout=2)
-                        if sign_btn:
+                        if sign_btn and sign_btn.is_displayed():
+                            used_selector = selector
+                            logger.info(f"✅ 找到签到按钮: {selector}")
                             break
-                    except:
+                    except Exception as e:
+                        logger.debug(f"选择器 {selector} 未找到: {e}")
                         continue
                 
                 if not sign_btn:
-                    return False, f"❌ {self.username} 未找到签到按钮"
-                
-                # 点击签到
-                logger.info("🖱️  正在点击签到按钮...")
-                sign_btn.click()
-                time.sleep(3)
-                
-                # 检查是否有滑块验证
-                page_text = self.page.html
-                if '验证' in page_text or 'captcha' in page_text.lower():
-                    logger.info("🤖 检测到滑块验证，尝试自动处理...")
-                    
-                    # 尝试点击滑块
+                    # 尝试通过文本查找
+                    logger.info("🔍 尝试通过文本查找签到按钮...")
                     try:
-                        slider = self.page.ele('css:.tncode', timeout=3)
-                        if slider:
-                            slider.click()
-                            time.sleep(2)
+                        sign_btn = self.page.ele('text:签到', timeout=3)
+                        if sign_btn:
+                            used_selector = "text:签到"
+                            logger.info("✅ 通过文本找到签到按钮")
                     except:
                         pass
+                
+                if not sign_btn:
+                    # 检查页面是否包含签到相关文字
+                    if '签到' not in page_html and 'qiandao' not in page_html.lower():
+                        return False, f"❌ {self.username} 页面中未找到签到相关内容，可能已签到或Cookie失效"
+                    else:
+                        logger.warning(f"页面包含签到文字但未找到按钮，可能是已签到或特殊状态")
+                        # 再次检查是否已签到
+                        if any(x in page_html for x in ['btnvisted', '已签到', '今日已签', '已领取']):
+                            return True, f"✅ {self.username} 今日已签到"
+                        return False, f"❌ {self.username} 页面包含签到文字但未找到签到按钮，请检查页面结构"
+                
+                # 点击签到
+                logger.info(f"🖱️  正在点击签到按钮 (选择器: {used_selector})...")
+                try:
+                    sign_btn.click()
+                except Exception as e:
+                    # 尝试JavaScript点击
+                    try:
+                        self.page.run_js("arguments[0].click();", sign_btn)
+                    except:
+                        return False, f"❌ {self.username} 点击签到按钮失败: {e}"
+                
+                # 等待响应
+                logger.info("⏳ 等待响应...")
+                time.sleep(5)
+                
+                # 检查是否有滑块验证或弹窗
+                page_text = self.page.html
+                
+                # 检查是否有iframe（可能包含滑块）
+                try:
+                    iframes = self.page.eles('css:iframe', timeout=2)
+                    if iframes:
+                        logger.info(f"🖼️  检测到 {len(iframes)} 个iframe，尝试获取iframe内容...")
+                        # 尝试通过JS获取iframe内容
+                        for i, iframe in enumerate(iframes):
+                            try:
+                                iframe_html = self.page.run_js(
+                                    "return document.querySelectorAll('iframe')[arguments[0]].contentDocument.body.innerHTML;", 
+                                    i
+                                )
+                                if iframe_html and any(x in iframe_html for x in ['验证', 'captcha', '滑块']):
+                                    logger.info(f"iframe {i} 包含验证内容")
+                                    # 在iframe中查找并点击滑块
+                                    try:
+                                        self.page.run_js(
+                                            "document.querySelectorAll('iframe')[arguments[0]].contentDocument.querySelector('.tncode, .captcha, [class*=slider]').click();",
+                                            i
+                                        )
+                                        time.sleep(3)
+                                    except:
+                                        pass
+                                break
+                            except:
+                                pass
+                except Exception as e:
+                    logger.debug(f"检查iframe失败: {e}")
+                
+                # 检查滑块验证
+                if any(x in page_text.lower() for x in ['验证', 'captcha', '滑块', 'tncode', '安全验证', '点击进行']):
+                    logger.info("🤖 检测到滑块验证，尝试自动处理...")
                     
-                    # 等待验证完成
-                    for i in range(10):
+                    # 尝试多种滑块选择器
+                    slider_selectors = [
+                        'css:.tncode',
+                        'css:.tncode-text',
+                        'css:#tncode_div',
+                        'css:.captcha',
+                        'css:[class*="captcha"]',
+                        'css:[class*="slider"]',
+                    ]
+                    
+                    for selector in slider_selectors:
+                        try:
+                            slider = self.page.ele(selector, timeout=2)
+                            if slider and slider.is_displayed():
+                                logger.info(f"找到滑块元素: {selector}")
+                                slider.click()
+                                time.sleep(3)
+                                break
+                        except:
+                            continue
+                    
+                    # 等待验证完成（最多30秒）
+                    logger.info("⏳ 等待验证完成...")
+                    for i in range(15):
                         time.sleep(2)
                         page_text = self.page.html
-                        if any(x in page_text for x in ['成功', '已签到', '恭喜']):
+                        if any(x in page_text for x in ['成功', '已签到', '恭喜', '签到成功']):
+                            logger.info("✅ 验证完成")
+                            break
+                        # 检查验证是否失败
+                        if any(x in page_text for x in ['失败', '错误', 'error', 'fail']):
+                            logger.warning("⚠️ 验证可能失败")
                             break
                 
                 # 检查结果
                 page_text = self.page.html
-                if any(x in page_text for x in ['成功', '已签到', '恭喜', '签到成功']):
+                logger.info(f"响应页面内容摘要: {page_text[:800]}")
+                
+                # 成功的各种可能提示
+                success_keywords = ['成功', '签到成功', '恭喜', '已签到', '签到完成', 'success', 'qiandao_success']
+                already_keywords = ['已经签到', '今日已签', '已领取', 'already', '今天已经']
+                fail_keywords = ['失败', '错误', 'fail', 'error', '无法', '不能']
+                
+                if any(x in page_text for x in success_keywords):
                     return True, f"✅ {self.username} 签到成功"
-                elif '已经' in page_text or '已签' in page_text:
+                elif any(x in page_text for x in already_keywords):
                     return True, f"✅ {self.username} 今日已签到"
+                elif any(x in page_text for x in fail_keywords):
+                    return False, f"❌ {self.username} 签到失败，请检查日志"
                 else:
-                    return False, f"⚠️ {self.username} 签到结果未知，请手动检查"
+                    # 尝试刷新页面再检查一次
+                    logger.info("🔄 刷新页面再次检查签到状态...")
+                    self.page.get(SIGN_PAGE_URL)
+                    time.sleep(3)
+                    page_text = self.page.html
+                    
+                    if any(x in page_text for x in ['btnvisted', '已签到', '今日已签']):
+                        return True, f"✅ {self.username} 今日已签到"
+                    else:
+                        return False, f"⚠️ {self.username} 签到结果未知，请手动检查。页面内容: {page_text[:300]}"
                     
             except Exception as e:
                 return False, f"❌ {self.username} 签到操作失败: {str(e)[:100]}"
