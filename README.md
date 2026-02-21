@@ -216,6 +216,9 @@ MY_PROXY=http://127.0.0.1:7890
 
 **高级配置（可选）：**
 ```bash
+# DNS 被污染时使用自定义 IP
+LAOWANG_CUSTOM_HOST=104.21.x.x  # laowang.vip 的真实 IP
+
 # SSL证书验证（默认开启，遇到证书错误时设为false）
 LAOWANG_VERIFY_SSL=true
 
@@ -225,6 +228,15 @@ LAOWANG_DEBUG=true
 # 随机延迟（默认开启）
 RANDOM_SIGNIN=true
 MAX_RANDOM_DELAY=300
+```
+
+**完整配置示例（DNS 被污染时）：**
+```bash
+# 基础配置
+LAOWANG_ACCOUNT=用户名:密码
+LAOWANG_CUSTOM_HOST=104.21.47.182  # 获取方式：ping laowang.vip
+LAOWANG_VERIFY_SSL=false
+LAOWANG_DEBUG=true
 ```
 
 #### 可选配置
@@ -477,6 +489,34 @@ PICA_ACCOUNT=user1:pass@123
 user2:pass&456
 ```
 
+### Q: DNS 解析错误（DNS 被污染）？
+
+A: 如果看到 `DNS解析: laowang.vip -> 0.0.0.0` 或 `TCP连接失败`，说明 DNS 被污染。
+
+**解决方法（按推荐顺序）：**
+
+1. **使用自定义域名解析（推荐）：**
+```bash
+# 先在其他正常机器获取真实 IP
+ping laowang.vip
+
+# 然后设置自定义 IP
+LAOWANG_CUSTOM_HOST=104.21.x.x  # 替换为真实 IP
+```
+
+2. **更换 DNS 服务器：**
+```bash
+# 修改容器 DNS
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+```
+
+3. **添加 hosts 解析：**
+```bash
+# 在青龙容器中执行
+echo "104.21.x.x laowang.vip" >> /etc/hosts
+```
+
 ### Q: SSL/TLS 或 HTTPS 连接错误？
 
 A: 如果遇到 `Max retries exceeded`、`SSL` 或 `HTTPSConnectionPool` 错误：
@@ -523,6 +563,11 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 到项目 Issues 页面报告问题
 
 ##  更新日志
+
+### v2.4.2 (2025-02-21)
+- 🔧 新增自定义域名解析 (`LAOWANG_CUSTOM_HOST`)
+- 🛠️ 解决 DNS 污染导致的连接问题
+- 🔍 优化网络诊断功能
 
 ### v2.4.1 (2025-02-21)
 - 🔧 修复 SSL/TLS 连接问题

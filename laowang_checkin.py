@@ -29,7 +29,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============ 配置常量 ============
-BASE_URL = "https://laowang.vip"
+# 自定义域名解析（当 DNS 被污染时使用）
+CUSTOM_HOST = os.getenv('LAOWANG_CUSTOM_HOST', '')  # 例如: 104.21.47.182
+
+if CUSTOM_HOST:
+    # 使用自定义 IP + Host 头
+    BASE_URL = f"https://{CUSTOM_HOST}"
+    logger.info(f"🌐 使用自定义域名解析: {CUSTOM_HOST}")
+else:
+    BASE_URL = "https://laowang.vip"
+
 LOGIN_URL = f"{BASE_URL}/member.php?mod=logging&action=login"
 SIGN_PAGE_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign"
 SIGN_API_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign&operation=qiandao&format=button_inajax"
@@ -246,16 +255,21 @@ class LaowangLoginSign:
         import urllib3
         
         session = requests.Session()
-        session.headers.update({
+        headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': BASE_URL,
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Host': 'laowang.vip',
-        })
+        }
+        
+        # 如果使用自定义域名解析，需要设置 Host 头
+        if CUSTOM_HOST:
+            headers['Host'] = 'laowang.vip'
+            logger.info(f"🌐 设置 Host 头: laowang.vip")
+        
+        session.headers.update(headers)
         
         # 设置代理
         proxies = get_proxies()
@@ -486,19 +500,31 @@ class LaowangCookieSign:
     def _create_session(self):
         """创建请求会话"""
         import requests
+        import urllib3
         session = requests.Session()
-        session.headers.update({
+        headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9',
             'Cookie': self.cookie,
-        })
+        }
+        
+        # 如果使用自定义域名解析，需要设置 Host 头
+        if CUSTOM_HOST:
+            headers['Host'] = 'laowang.vip'
+        
+        session.headers.update(headers)
         
         # 设置代理
         proxies = get_proxies()
         if proxies:
             session.proxies.update(proxies)
             logger.info(f"🌐 使用代理: {proxies['http']}")
+        
+        # 如果禁用SSL验证
+        if not VERIFY_SSL:
+            session.verify = False
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         return session
     
