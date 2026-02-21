@@ -40,8 +40,7 @@
 | `baiduwangpan_checkin.py` | 百度网盘签到脚本 | 网盘 | `BAIDU_COOKIE` |
 | `ty_netdisk_checkin.py` | 天翼云盘签到脚本 | 网盘 | `TY_USERNAME` + `TY_PASSWORD` |
 | `ikuuu_checkin.py` | IKUAI 签到脚本 | 其他 | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
-| `laowang-auto-signup-v2.py` | 老王论坛签到脚本（旧版） | 论坛 | `LAOWANG_COOKIE` |
-| `laowang_checkin.py` | 老王论坛签到脚本（新版，推荐） | 论坛 | `LAOWANG_COOKIE` |
+| `laowang_checkin.py` | 老王论坛签到脚本 | 论坛 | `LAOWANG_ACCOUNT` 或 `LAOWANG_COOKIE` |
 
 所有脚本都可以独立在青龙面板中运行，支持环境变量配置和推送通知。
 
@@ -56,7 +55,7 @@
 | 漫画签到 | `pica_punch.py` + `jm_punch.py` | `PICA_ACCOUNT`, `JM_ACCOUNT` |
 | 网盘签到 | `quark_punch.py` + `aliyunpan_checkin.py` + `baiduwangpan_checkin.py` + `ty_netdisk_checkin.py` | `COOKIE_QUARK`, `ALIYUN_REFRESH_TOKEN`, `BAIDU_COOKIE`, `TY_USERNAME`+`TY_PASSWORD` |
 | 宽带签到 | `ikuuu_checkin.py` | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
-| 论坛签到 | `laowang_checkin.py` | `LAOWANG_COOKIE` |
+| 论坛签到 | `laowang_checkin.py` | `LAOWANG_ACCOUNT` |
 | 全平台签到 | 全部脚本 | 对应环境变量 |
 
 ### 2. 部署到青龙面板
@@ -174,15 +173,11 @@ IKUUU_PASSWD=password
 #### 老王论坛
 
 ```bash
-# 方式1: 账号密码 + 浏览器模式（自动处理滑块验证）⭐推荐
+# 方式1: 账号密码（自动处理滑块，推荐）⭐
 LAOWANG_ACCOUNT=用户名:密码
-LAOWANG_BROWSER_MODE=true
 
 # 方式2: Cookie（从浏览器获取，最稳定）
 LAOWANG_COOKIE=your_cookie_here
-
-# 方式3: 账号密码（HTTP模式，可能遇到滑块验证）
-LAOWANG_ACCOUNT=用户名:密码
 
 # 多账号用 & 或换行分隔
 LAOWANG_ACCOUNT=user1:pass1&user2:pass2
@@ -193,9 +188,18 @@ LAOWANG_PROXY=http://127.0.0.1:7890
 MY_PROXY=http://127.0.0.1:7890
 ```
 
-**浏览器模式安装依赖：**
+**安装依赖（账号密码模式需要）：**
 ```bash
 pip install DrissionPage
+```
+
+**高级配置（可选）：**
+```bash
+# 浏览器模式设置（默认 auto，自动检测）
+LAOWANG_BROWSER_MODE=auto  # auto/true/false
+
+# 调试模式（默认关闭）
+LAOWANG_DEBUG=false
 ```
 
 > 💡 **推荐使用账号密码模式**：
@@ -294,7 +298,7 @@ DD_BOT_SECRET=secret
 | 百度网盘签到 | `/ql/scripts/baiduwangpan_checkin.py` | `0 9 * * *` | Python |
 | 天翼云盘签到 | `/ql/scripts/ty_netdisk_checkin.py` | `1 16 * * *` | Python |
 | IKUAI签到 | `/ql/scripts/ikuuu_checkin.py` | `0 21 * * *` | Python |
-| 老王论坛签到 | `/ql/scripts/laowang_checkin.py` | `0 9 * * *` | Python |
+| 老王论坛签到 | `task laowang_checkin.py` | `0 9 * * *` | Python |
 
 ### Cron 表达式参考
 
@@ -411,9 +415,9 @@ A: 不同平台获取认证信息的方法：
 
 **老王论坛（LAOWANG_ACCOUNT）**：
 - 访问老王论坛（laowang.vip）注册账号
-- **推荐**：使用账号密码格式 `用户名:密码`
-- **备用**：从浏览器复制 Cookie 字符串
+- 使用账号密码格式 `用户名:密码`
 - 多账号用 `&` 或换行分隔
+- 自动处理滑块验证（需要安装 DrissionPage）
 
 ### Q: 账号登录失败？
 
@@ -512,43 +516,17 @@ A: 如果看到 `DNS解析: laowang.vip -> 0.0.0.0` 或 `TCP连接失败`，说�
 **快速解决 - 使用已验证的 IP：**
 ```bash
 LAOWANG_ACCOUNT=用户名:密码
-LAOWANG_CUSTOM_HOST=172.67.158.164  # 或 104.21.14.105, 172.64.35.25
-LAOWANG_VERIFY_SSL=false
+LAOWANG_CUSTOM_HOST=172.67.158.164
 ```
 
-**已验证可用的 IP（2025-02-21）：**
-- `172.67.158.164`
-- `104.21.14.105`
-- `172.64.35.25`
+**已验证可用的 IP：** `172.67.158.164`, `104.21.14.105`, `172.64.35.25`
 
-**如果 IP 直连仍然 SSL 错误，建议使用代理：**
-```bash
-# 使用代理服务器（代理服务器需要能正常解析 DNS）
-LAOWANG_ACCOUNT=用户名:密码
-LAOWANG_PROXY=http://你的代理服务器:端口
-```
-
-**或者修改容器 hosts（不需要代理）：**
+**如果 IP 直连 SSL 错误，修改容器 hosts：**
 ```bash
 # 进入青龙容器
 docker exec -it qinglong bash
-
-# 添加 hosts 解析
 echo "172.67.158.164 laowang.vip" >> /etc/hosts
-
-# 测试连接
-ping laowang.vip  # 应该显示 172.67.158.164
 ```
-
-**故障排除：SSL 握手失败**
-如果看到 `SSLV3_ALERT_HANDSHAKE_FAILURE` 错误，说明：
-1. DNS 被污染 → 使用 `LAOWANG_CUSTOM_HOST` 指定 IP
-2. 但 Cloudflare CDN 的 SSL 证书与 IP 不匹配
-
-**解决方案（按推荐顺序）：**
-1. **使用代理服务器**（最简单，代理服务器处理 DNS 和 SSL）
-2. **修改容器 hosts**（让 DNS 解析到正确 IP，SSL 证书就能匹配）
-3. **使用本地 DNS**（在路由器或宿主机上设置正确的 DNS）
 
 **其他解决方法：**
 

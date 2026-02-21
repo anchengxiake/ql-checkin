@@ -50,8 +50,12 @@ RETRY_DELAY = 5
 # SSL 验证配置（遇到证书问题时设为 false）
 VERIFY_SSL = os.getenv('LAOWANG_VERIFY_SSL', 'true').lower() != 'false'
 
-# 调试模式
+# 调试模式（开启后显示详细日志）
 DEBUG_MODE = os.getenv('LAOWANG_DEBUG', 'false').lower() == 'true'
+
+# 浏览器模式（账号密码登录时自动处理滑块）
+# auto = 自动检测（优先用浏览器模式），true = 强制使用，false = 禁用
+BROWSER_MODE = os.getenv('LAOWANG_BROWSER_MODE', 'auto').lower()
 
 # ============ 通知模块 ============
 notify = None
@@ -1022,11 +1026,33 @@ LAOWANG_PROXY=http://127.0.0.1:7890
     accounts = parse_accounts(env_str)
     print(f"✅ 检测到 {len(accounts)} 个账号\n")
     
-    # 检查是否使用浏览器模式（处理滑块验证）
-    use_browser = os.getenv('LAOWANG_BROWSER_MODE', 'false').lower() == 'true'
-    if use_browser:
-        print("🤖 浏览器模式已启用（自动处理滑块验证）")
-        print("⚠️  需要安装 DrissionPage: pip install DrissionPage\n")
+    # 检查 DrissionPage 是否可用
+    drissionpage_available = False
+    try:
+        import DrissionPage
+        drissionpage_available = True
+    except ImportError:
+        pass
+    
+    # 浏览器模式设置
+    # auto: 自动选择（账号密码优先用浏览器模式）
+    # true: 强制使用浏览器模式
+    # false: 禁用浏览器模式（只用HTTP）
+    if BROWSER_MODE == 'true':
+        use_browser = True
+        force_browser = True
+    elif BROWSER_MODE == 'false':
+        use_browser = False
+        force_browser = False
+    else:  # auto
+        use_browser = drissionpage_available
+        force_browser = False
+    
+    if use_browser and drissionpage_available:
+        print("🤖 浏览器模式已启用（自动处理滑块验证）\n")
+    elif not drissionpage_available and BROWSER_MODE == 'true':
+        print("⚠️  警告: 未安装 DrissionPage，无法使用浏览器模式")
+        print("   请运行: pip install DrissionPage\n")
     
     # 签到结果
     results = []
@@ -1037,25 +1063,41 @@ LAOWANG_PROXY=http://127.0.0.1:7890
         print(f"{'─' * 50}")
         
         if account['type'] == 'password':
-            if use_browser:
-                # 浏览器模式（处理滑块）
+            # 账号密码模式：优先使用浏览器模式（处理滑块）
+            if use_browser and drissionpage_available:
                 signer = LaowangBrowserSign(
                     account['username'],
                     account['password'],
                     idx
                 )
+                success, msg = signer.do_sign()
+                
+                # 如果浏览器模式失败且不是强制模式，尝试HTTP模式
+                if not success and not force_browser and '滑块' not in msg:
+                    logger.info("🔄 浏览器模式失败，尝试HTTP模式...")
+                    signer = LaowangLoginSign(
+                        account['username'],
+                        account['password'],
+                        idx
+                    )
+                    success, msg = signer.do_sign()
             else:
-                # HTTP 模式（可能遇到滑块问题）
+                # HTTP模式（可能遇到滑块）
                 signer = LaowangLoginSign(
                     account['username'],
                     account['password'],
                     idx
                 )
+                success, msg = signer.do_sign()
+                
+                # 如果是因为滑块失败且安装了DrissionPage，提示使用浏览器模式
+                if not success and '滑块' in msg and drissionpage_available:
+                    msg += "\n💡 提示: 安装 DrissionPage 可自动处理滑块"
         else:
             # Cookie 模式
             signer = LaowangCookieSign(account['cookie'], idx)
+            success, msg = signer.do_sign()
         
-        success, msg = signer.do_sign()
         results.append((idx, success, msg))
         print(msg)
         
