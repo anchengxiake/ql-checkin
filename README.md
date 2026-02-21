@@ -174,11 +174,15 @@ IKUUU_PASSWD=password
 #### 老王论坛
 
 ```bash
-# 方式1: 账号密码（推荐，自动处理登录）
+# 方式1: 账号密码 + 浏览器模式（自动处理滑块验证）⭐推荐
 LAOWANG_ACCOUNT=用户名:密码
+LAOWANG_BROWSER_MODE=true
 
-# 方式2: Cookie（从浏览器获取）
+# 方式2: Cookie（从浏览器获取，最稳定）
 LAOWANG_COOKIE=your_cookie_here
+
+# 方式3: 账号密码（HTTP模式，可能遇到滑块验证）
+LAOWANG_ACCOUNT=用户名:密码
 
 # 多账号用 & 或换行分隔
 LAOWANG_ACCOUNT=user1:pass1&user2:pass2
@@ -187,6 +191,11 @@ LAOWANG_ACCOUNT=user1:pass1&user2:pass2
 LAOWANG_PROXY=http://127.0.0.1:7890
 # 或使用全局代理
 MY_PROXY=http://127.0.0.1:7890
+```
+
+**浏览器模式安装依赖：**
+```bash
+pip install DrissionPage
 ```
 
 > 💡 **推荐使用账号密码模式**：
@@ -613,6 +622,11 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 🐛 修复 formhash 提取逻辑，支持更多页面格式
 - 🔍 添加登录页面调试输出
 - ✅ 网络连接问题解决，登录功能正常工作
+
+### v2.4.4 (2025-02-21)
+- 🤖 **重新添加浏览器模式**，自动处理滑块验证
+- 🔧 支持 `LAOWANG_BROWSER_MODE=true` 启用浏览器
+- 📝 三种模式可选：浏览器模式 / HTTP模式 / Cookie模式
 
 ### v2.4.3 (2025-02-21)
 - 🔒 改进 SSL 禁用方式（使用 NoVerifyHTTPAdapter）
