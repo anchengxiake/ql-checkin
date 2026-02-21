@@ -351,12 +351,37 @@ class LaowangLoginSign:
             response = request_with_retry(self.session, 'get', LOGIN_URL)
             response.encoding = 'utf-8'
             
-            # 提取 formhash
-            formhash_match = re.search(r'name="formhash" value="([a-f0-9]{8})"', response.text)
-            if not formhash_match:
-                formhash_match = re.search(r'formhash=([a-f0-9]{8})', response.text)
+            # 调试：输出页面内容前 1000 字符
+            if DEBUG_MODE:
+                logger.debug(f"登录页面内容: {response.text[:1000]}")
+            
+            # 提取 formhash（多种模式尝试）
+            formhash_match = None
+            formhash_patterns = [
+                r'name="formhash" value="([a-f0-9]{8})"',
+                r'formhash=([a-f0-9]{8})',
+                r'<input[^>]*name=["\']formhash["\'][^>]*value=["\']([a-f0-9]{8})["\']',
+                r'value="([a-f0-9]{8})"[^>]*name="formhash"',
+            ]
+            
+            for pattern in formhash_patterns:
+                formhash_match = re.search(pattern, response.text)
+                if formhash_match:
+                    logger.debug(f"使用模式提取 formhash: {pattern}")
+                    break
             
             if not formhash_match:
+                # 检查是否已经是登录状态
+                if 'member.php?mod=logging&action=logout' in response.text:
+                    logger.info("✅ 已经是登录状态")
+                    # 提取用户名
+                    username_match = re.search(r'title="访问我的空间">([^<]+)</a>', response.text)
+                    if username_match:
+                        self.display_name = username_match.group(1).strip()
+                    return True, "已经是登录状态"
+                
+                if DEBUG_MODE:
+                    logger.error(f"页面内容（前2000字符）: {response.text[:2000]}")
                 return False, "未找到 formhash，登录失败"
             
             formhash = formhash_match.group(1)
