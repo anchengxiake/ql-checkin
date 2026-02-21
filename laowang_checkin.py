@@ -38,9 +38,11 @@ SIGN_API_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign&operation=qiandao&format
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 
-# 截图配置（青龙面板建议关闭或配置正确路径）
-ENABLE_SCREENSHOT = os.getenv('LAOWANG_SCREENSHOT', 'false').lower() == 'true'
-SCREENSHOT_PATH = os.getenv('LAOWANG_SCREENSHOT_PATH', './laowang_screenshot.png')
+# SSL 验证配置（遇到证书问题时设为 false）
+VERIFY_SSL = os.getenv('LAOWANG_VERIFY_SSL', 'true').lower() != 'false'
+
+# 调试模式
+DEBUG_MODE = os.getenv('LAOWANG_DEBUG', 'false').lower() == 'true'
 
 # ============ 通知模块 ============
 notify = None
@@ -98,10 +100,19 @@ def wait_countdown(seconds, task_name="签到"):
 def request_with_retry(session, method, url, **kwargs):
     """带重试的请求"""
     import requests
+    import urllib3
+    
+    # 禁用 SSL 警告
+    if not VERIFY_SSL:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     # 默认超时
     if 'timeout' not in kwargs:
         kwargs['timeout'] = 30
+    
+    # SSL 验证
+    if 'verify' not in kwargs:
+        kwargs['verify'] = VERIFY_SSL
     
     last_error = None
     for attempt in range(MAX_RETRIES):
@@ -118,18 +129,105 @@ def request_with_retry(session, method, url, **kwargs):
             last_error = "请求超时"
             logger.warning(f"请求超时 (尝试 {attempt+1}/{MAX_RETRIES})")
         except requests.exceptions.ConnectionError as e:
-            last_error = f"连接错误: {str(e)[:100]}"
-            logger.warning(f"连接失败 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
+            error_str = str(e)
+            # 更详细的错误分析
+            if 'SSL' in error_str or 'TLS' in error_str or 'CERTIFICATE' in error_str:
+                last_error = f"SSL/TLS证书错误: {error_str[:100]}"
+                logger.warning(f"SSL错误 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
+                if attempt == 0:
+                    logger.info("💡 提示: 可尝试设置 LAOWANG_VERIFY_SSL=false 跳过证书验证")
+            elif 'Name or service not known' in error_str or 'getaddrinfo' in error_str:
+                last_error = f"DNS解析失败: {error_str[:100]}"
+                logger.warning(f"DNS错误 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
+            else:
+                last_error = f"连接错误: {error_str[:100]}"
+                logger.warning(f"连接失败 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
+        except requests.exceptions.SSLError as e:
+            last_error = f"SSL错误: {str(e)[:100]}"
+            logger.warning(f"SSL错误 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
+            if attempt == 0:
+                logger.info("💡 提示: 可尝试设置 LAOWANG_VERIFY_SSL=false 跳过证书验证")
         except Exception as e:
             last_error = f"请求异常: {str(e)[:100]}"
             logger.warning(f"请求异常 (尝试 {attempt+1}/{MAX_RETRIES}): {last_error}")
         
         if attempt < MAX_RETRIES - 1:
             sleep_time = RETRY_DELAY * (attempt + 1)
-            logger.info(f"⏳ {RETRY_DELAY}秒后重试...")
+            logger.info(f"⏳ {sleep_time}秒后重试...")
             time.sleep(sleep_time)
     
     raise Exception(f"请求失败 ({MAX_RETRIES}次重试): {last_error}")
+
+
+def test_connection():
+    """测试网络连接"""
+    import socket
+    import ssl
+    
+    logger.info("🔍 测试网络连接...")
+    
+    # 1. DNS 解析测试
+    try:
+        ip = socket.gethostbyname('laowang.vip')
+        logger.info(f"✅ DNS解析: laowang.vip -> {ip}")
+    except Exception as e:
+        logger.error(f"❌ DNS解析失败: {e}")
+        return False
+    
+    # 2. TCP 连接测试
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        result = sock.connect_ex(('laowang.vip', 443))
+        if result == 0:
+            logger.info("✅ TCP连接: 端口443连接成功")
+        else:
+            logger.error(f"❌ TCP连接: 端口443连接失败 (错误码: {result})")
+            return False
+        sock.close()
+    except Exception as e:
+        logger.error(f"❌ TCP连接测试失败: {e}")
+        return False
+    
+    # 3. HTTPS 测试（requests）
+    try:
+        import requests
+        session = requests.Session()
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        
+        proxies = get_proxies()
+        if proxies:
+            session.proxies.update(proxies)
+        
+        # 先尝试不验证证书
+        logger.info("🔒 测试HTTPS (跳过证书验证)...")
+        response = session.get(
+            BASE_URL, 
+            timeout=10, 
+            verify=False,
+            proxies=proxies
+        )
+        logger.info(f"✅ HTTPS连接成功: HTTP {response.status_code}")
+        
+        # 再尝试验证证书
+        try:
+            logger.info("🔒 测试HTTPS (验证证书)...")
+            response = session.get(
+                BASE_URL, 
+                timeout=10, 
+                verify=True,
+                proxies=proxies
+            )
+            logger.info(f"✅ HTTPS证书验证通过")
+        except Exception as e:
+            logger.warning(f"⚠️ HTTPS证书验证失败: {e}")
+            logger.info("💡 建议设置 LAOWANG_VERIFY_SSL=false")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ HTTPS测试失败: {e}")
+        return False
 
 # ============ 账号密码登录模式 ============
 class LaowangLoginSign:
@@ -145,6 +243,8 @@ class LaowangLoginSign:
     def _create_session(self):
         """创建请求会话"""
         import requests
+        import urllib3
+        
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
@@ -154,6 +254,7 @@ class LaowangLoginSign:
             'Referer': BASE_URL,
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Host': 'laowang.vip',
         })
         
         # 设置代理
@@ -161,6 +262,12 @@ class LaowangLoginSign:
         if proxies:
             session.proxies.update(proxies)
             logger.info(f"🌐 使用代理: {proxies['http']}")
+        
+        # 如果禁用SSL验证
+        if not VERIFY_SSL:
+            session.verify = False
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            logger.info("⚠️ SSL证书验证已禁用")
         
         return session
     
@@ -558,6 +665,11 @@ LAOWANG_PROXY=http://127.0.0.1:7890
         print(error_msg)
         push_notify("老王论坛签到失败", error_msg)
         sys.exit(1)
+    
+    # 调试模式：测试网络连接
+    if DEBUG_MODE:
+        test_connection()
+        print("")
     
     # 解析账号
     accounts = parse_accounts(env_str)

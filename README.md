@@ -216,9 +216,11 @@ MY_PROXY=http://127.0.0.1:7890
 
 **高级配置（可选）：**
 ```bash
-# 截图调试（默认关闭，青龙面板可能不支持）
-LAOWANG_SCREENSHOT=false
-LAOWANG_SCREENSHOT_PATH=./laowang_screenshot.png
+# SSL证书验证（默认开启，遇到证书错误时设为false）
+LAOWANG_VERIFY_SSL=true
+
+# 调试模式（开启后显示网络诊断信息）
+LAOWANG_DEBUG=true
 
 # 随机延迟（默认开启）
 RANDOM_SIGNIN=true
@@ -475,6 +477,38 @@ PICA_ACCOUNT=user1:pass@123
 user2:pass&456
 ```
 
+### Q: SSL/TLS 或 HTTPS 连接错误？
+
+A: 如果遇到 `Max retries exceeded`、`SSL` 或 `HTTPSConnectionPool` 错误：
+
+**解决方法：**
+
+1. **跳过证书验证（快速解决）：**
+```bash
+LAOWANG_VERIFY_SSL=false
+```
+
+2. **开启调试模式查看详情：**
+```bash
+LAOWANG_DEBUG=true
+```
+
+3. **更新系统证书：**
+```bash
+# Debian/Ubuntu
+apt-get update && apt-get install -y ca-certificates
+
+# CentOS/RHEL
+yum install -y ca-certificates
+```
+
+4. **检查系统时间（SSL证书验证需要正确时间）：**
+```bash
+date
+# 如果时间不对，同步时间
+ntpdate -u pool.ntp.org
+```
+
 ### Q: 执行报错 KeyError？
 
 A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因：
@@ -489,6 +523,12 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 到项目 Issues 页面报告问题
 
 ##  更新日志
+
+### v2.4.1 (2025-02-21)
+- 🔧 修复 SSL/TLS 连接问题
+- 🔍 新增网络诊断功能 (`LAOWANG_DEBUG=true`)
+- 🔒 支持跳过证书验证 (`LAOWANG_VERIFY_SSL=false`)
+- 📝 更详细的错误提示和解决方案
 
 ### v2.4.0 (2025-02-21)
 - ✨ 老王论坛签到脚本 v4.0 大更新
