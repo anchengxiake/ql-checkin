@@ -294,23 +294,22 @@ class LaowangLoginSign:
         import requests
         import urllib3
         from requests.adapters import HTTPAdapter
-        from urllib3.util.ssl_ import create_urllib3_context
         
-        # 创建自定义 SSL 上下文（禁用所有验证）
-        class SSLAdapter(HTTPAdapter):
-            def init_poolmanager(self, *args, **kwargs):
-                context = create_urllib3_context()
-                context.check_hostname = False
-                context.verify_mode = 0  # SSL.CERT_NONE
-                kwargs['ssl_context'] = context
-                return super().init_poolmanager(*args, **kwargs)
+        # 完全禁用 SSL 的 Adapter - 终极方案
+        class NoVerifyHTTPAdapter(HTTPAdapter):
+            def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+                from urllib3.poolmanager import PoolManager
+                pool_kwargs['cert_reqs'] = 'CERT_NONE'
+                pool_kwargs['assert_hostname'] = False
+                pool_kwargs['assert_fingerprint'] = None
+                return PoolManager(connections, maxsize, block, **pool_kwargs)
         
         session = requests.Session()
         
-        # 如果使用自定义域名解析，需要完全禁用 SSL
+        # 如果使用自定义域名解析，使用完全禁用 SSL 的 Adapter
         if CUSTOM_HOST:
-            session.mount('https://', SSLAdapter())
-            logger.info("🔒 使用自定义 SSL 适配器（完全禁用验证）")
+            session.mount('https://', NoVerifyHTTPAdapter())
+            logger.info("🔒 使用 NoVerifyHTTPAdapter（完全禁用 SSL）")
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
@@ -334,7 +333,7 @@ class LaowangLoginSign:
             session.proxies.update(proxies)
             logger.info(f"🌐 使用代理: {proxies['http']}")
         
-        # 禁用 SSL 验证和警告
+        # 完全禁用 SSL 验证和警告
         session.verify = False
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
@@ -559,20 +558,20 @@ class LaowangCookieSign:
         from requests.adapters import HTTPAdapter
         from urllib3.util.ssl_ import create_urllib3_context
         
-        # 创建自定义 SSL 上下文（禁用所有验证）
-        class SSLAdapter(HTTPAdapter):
-            def init_poolmanager(self, *args, **kwargs):
-                context = create_urllib3_context()
-                context.check_hostname = False
-                context.verify_mode = 0
-                kwargs['ssl_context'] = context
-                return super().init_poolmanager(*args, **kwargs)
+        # 完全禁用 SSL 的 Adapter
+        class NoVerifyHTTPAdapter(HTTPAdapter):
+            def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+                from urllib3.poolmanager import PoolManager
+                pool_kwargs['cert_reqs'] = 'CERT_NONE'
+                pool_kwargs['assert_hostname'] = False
+                pool_kwargs['assert_fingerprint'] = None
+                return PoolManager(connections, maxsize, block, **pool_kwargs)
         
         session = requests.Session()
         
-        # 如果使用自定义域名解析，需要完全禁用 SSL
+        # 如果使用自定义域名解析，使用完全禁用 SSL 的 Adapter
         if CUSTOM_HOST:
-            session.mount('https://', SSLAdapter())
+            session.mount('https://', NoVerifyHTTPAdapter())
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',

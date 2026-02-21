@@ -512,6 +512,35 @@ LAOWANG_VERIFY_SSL=false
 - `104.21.14.105`
 - `172.64.35.25`
 
+**如果 IP 直连仍然 SSL 错误，建议使用代理：**
+```bash
+# 使用代理服务器（代理服务器需要能正常解析 DNS）
+LAOWANG_ACCOUNT=用户名:密码
+LAOWANG_PROXY=http://你的代理服务器:端口
+```
+
+**或者修改容器 hosts（不需要代理）：**
+```bash
+# 进入青龙容器
+docker exec -it qinglong bash
+
+# 添加 hosts 解析
+echo "172.67.158.164 laowang.vip" >> /etc/hosts
+
+# 测试连接
+ping laowang.vip  # 应该显示 172.67.158.164
+```
+
+**故障排除：SSL 握手失败**
+如果看到 `SSLV3_ALERT_HANDSHAKE_FAILURE` 错误，说明：
+1. DNS 被污染 → 使用 `LAOWANG_CUSTOM_HOST` 指定 IP
+2. 但 Cloudflare CDN 的 SSL 证书与 IP 不匹配
+
+**解决方案（按推荐顺序）：**
+1. **使用代理服务器**（最简单，代理服务器处理 DNS 和 SSL）
+2. **修改容器 hosts**（让 DNS 解析到正确 IP，SSL 证书就能匹配）
+3. **使用本地 DNS**（在路由器或宿主机上设置正确的 DNS）
+
 **其他解决方法：**
 
 1. **自动寻找可用 IP：**
@@ -579,6 +608,10 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 到项目 Issues 页面报告问题
 
 ##  更新日志
+
+### v2.4.3 (2025-02-21)
+- 🔒 改进 SSL 禁用方式（使用 NoVerifyHTTPAdapter）
+- 📝 添加代理服务器解决方案
 
 ### v2.4.2 (2025-02-21)
 - 🔧 新增自定义域名解析 (`LAOWANG_CUSTOM_HOST`)
