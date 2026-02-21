@@ -239,6 +239,13 @@ LAOWANG_VERIFY_SSL=false
 LAOWANG_DEBUG=true
 ```
 
+**自动寻找可用 IP：**
+如果不知道真实 IP，开启调试模式后脚本会自动尝试多个候选 IP：
+```bash
+LAOWANG_DEBUG=true
+# 脚本会自动测试并提示可用的 IP
+```
+
 #### 可选配置
 
 ```bash
@@ -493,15 +500,24 @@ user2:pass&456
 
 A: 如果看到 `DNS解析: laowang.vip -> 0.0.0.0` 或 `TCP连接失败`，说明 DNS 被污染。
 
-**解决方法（按推荐顺序）：**
-
-1. **使用自定义域名解析（推荐）：**
+**快速解决 - 使用已验证的 IP：**
 ```bash
-# 先在其他正常机器获取真实 IP
-ping laowang.vip
+LAOWANG_ACCOUNT=用户名:密码
+LAOWANG_CUSTOM_HOST=172.67.158.164  # 或 104.21.14.105, 172.64.35.25
+LAOWANG_VERIFY_SSL=false
+```
 
-# 然后设置自定义 IP
-LAOWANG_CUSTOM_HOST=104.21.x.x  # 替换为真实 IP
+**已验证可用的 IP（2025-02-21）：**
+- `172.67.158.164`
+- `104.21.14.105`
+- `172.64.35.25`
+
+**其他解决方法：**
+
+1. **自动寻找可用 IP：**
+```bash
+LAOWANG_DEBUG=true
+# 脚本会自动测试多个候选 IP
 ```
 
 2. **更换 DNS 服务器：**
@@ -514,7 +530,7 @@ echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 3. **添加 hosts 解析：**
 ```bash
 # 在青龙容器中执行
-echo "104.21.x.x laowang.vip" >> /etc/hosts
+echo "172.67.158.164 laowang.vip" >> /etc/hosts
 ```
 
 ### Q: SSL/TLS 或 HTTPS 连接错误？
@@ -568,6 +584,7 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 🔧 新增自定义域名解析 (`LAOWANG_CUSTOM_HOST`)
 - 🛠️ 解决 DNS 污染导致的连接问题
 - 🔍 优化网络诊断功能
+- 📝 更新已验证 IP 列表（172.67.158.164, 104.21.14.105, 172.64.35.25）
 
 ### v2.4.1 (2025-02-21)
 - 🔧 修复 SSL/TLS 连接问题

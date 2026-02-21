@@ -179,26 +179,26 @@ def test_connection():
     try:
         ip = socket.gethostbyname('laowang.vip')
         logger.info(f"✅ DNS解析: laowang.vip -> {ip}")
+        if ip == '0.0.0.0' or ip.startswith('127.'):
+            logger.warning(f"⚠️ DNS解析到无效IP: {ip}，建议设置 LAOWANG_CUSTOM_HOST")
     except Exception as e:
         logger.error(f"❌ DNS解析失败: {e}")
-        return False
     
-    # 2. TCP 连接测试
+    # 2. TCP 连接测试（使用自定义IP或域名）
+    test_host = CUSTOM_HOST if CUSTOM_HOST else 'laowang.vip'
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10)
-        result = sock.connect_ex(('laowang.vip', 443))
+        result = sock.connect_ex((test_host, 443))
         if result == 0:
-            logger.info("✅ TCP连接: 端口443连接成功")
+            logger.info(f"✅ TCP连接: {test_host}:443 连接成功")
         else:
-            logger.error(f"❌ TCP连接: 端口443连接失败 (错误码: {result})")
-            return False
+            logger.error(f"❌ TCP连接: {test_host}:443 连接失败 (错误码: {result})")
         sock.close()
     except Exception as e:
         logger.error(f"❌ TCP连接测试失败: {e}")
-        return False
     
-    # 3. HTTPS 测试（requests）
+    # 3. HTTPS 测试
     try:
         import requests
         session = requests.Session()
@@ -208,8 +208,8 @@ def test_connection():
         if proxies:
             session.proxies.update(proxies)
         
-        # 先尝试不验证证书
-        logger.info("🔒 测试HTTPS (跳过证书验证)...")
+        # 使用当前配置测试
+        logger.info(f"🔒 测试HTTPS连接: {BASE_URL}...")
         response = session.get(
             BASE_URL, 
             timeout=10, 
@@ -217,26 +217,64 @@ def test_connection():
             proxies=proxies
         )
         logger.info(f"✅ HTTPS连接成功: HTTP {response.status_code}")
-        
-        # 再尝试验证证书
-        try:
-            logger.info("🔒 测试HTTPS (验证证书)...")
-            response = session.get(
-                BASE_URL, 
-                timeout=10, 
-                verify=True,
-                proxies=proxies
-            )
-            logger.info(f"✅ HTTPS证书验证通过")
-        except Exception as e:
-            logger.warning(f"⚠️ HTTPS证书验证失败: {e}")
-            logger.info("💡 建议设置 LAOWANG_VERIFY_SSL=false")
-        
         return True
         
     except Exception as e:
         logger.error(f"❌ HTTPS测试失败: {e}")
         return False
+
+
+def find_working_ip():
+    """尝试多个候选IP找到可用的"""
+    import requests
+    
+    # 候选IP列表（已验证可用的 IP 优先）
+    candidate_ips = [
+        '172.67.158.164',   # 用户验证可用
+        '104.21.14.105',    # 用户验证可用
+        '172.64.35.25',     # 用户验证可用
+        '104.21.15.106',
+        '172.67.175.25',
+        '172.67.176.26',
+        '104.21.16.107',
+        '104.21.17.108',
+    ]
+    
+    # 如果用户指定了 IP，优先测试
+    if CUSTOM_HOST and CUSTOM_HOST not in candidate_ips:
+        candidate_ips.insert(0, CUSTOM_HOST)
+    
+    logger.info("🔍 正在寻找可用的 IP...")
+    
+    for ip in candidate_ips:
+        try:
+            logger.debug(f"  测试 IP: {ip}")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0',
+                'Host': 'laowang.vip'
+            })
+            
+            proxies = get_proxies()
+            if proxies:
+                session.proxies.update(proxies)
+            
+            response = session.get(
+                f"https://{ip}",
+                timeout=5,
+                verify=False,
+                proxies=proxies
+            )
+            
+            if response.status_code == 200 or response.status_code == 403:
+                logger.info(f"✅ 找到可用 IP: {ip}")
+                return ip
+                
+        except Exception as e:
+            logger.debug(f"  IP {ip} 不可用: {e}")
+            continue
+    
+    return None
 
 # ============ 账号密码登录模式 ============
 class LaowangLoginSign:
@@ -694,7 +732,15 @@ LAOWANG_PROXY=http://127.0.0.1:7890
     
     # 调试模式：测试网络连接
     if DEBUG_MODE:
-        test_connection()
+        connection_ok = test_connection()
+        if not connection_ok and not CUSTOM_HOST:
+            # 自动寻找可用 IP
+            working_ip = find_working_ip()
+            if working_ip:
+                logger.info(f"💡 发现可用 IP: {working_ip}")
+                logger.info(f"   请设置环境变量: LAOWANG_CUSTOM_HOST={working_ip}")
+            else:
+                logger.error("❌ 未找到可用 IP，请手动检查网络")
         print("")
     
     # 解析账号
