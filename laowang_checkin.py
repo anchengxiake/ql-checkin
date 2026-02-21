@@ -112,15 +112,17 @@ def request_with_retry(session, method, url, **kwargs):
     import urllib3
     
     # 禁用 SSL 警告
-    if not VERIFY_SSL:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     # 默认超时
     if 'timeout' not in kwargs:
         kwargs['timeout'] = 30
     
-    # SSL 验证
-    if 'verify' not in kwargs:
+    # 如果使用自定义域名解析，完全禁用 SSL 验证（由 session 的 adapter 处理）
+    # 否则根据 VERIFY_SSL 设置
+    if CUSTOM_HOST:
+        kwargs['verify'] = False
+    elif 'verify' not in kwargs:
         kwargs['verify'] = VERIFY_SSL
     
     last_error = None
@@ -291,8 +293,25 @@ class LaowangLoginSign:
         """创建请求会话"""
         import requests
         import urllib3
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.ssl_ import create_urllib3_context
+        
+        # 创建自定义 SSL 上下文（禁用所有验证）
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = create_urllib3_context()
+                context.check_hostname = False
+                context.verify_mode = 0  # SSL.CERT_NONE
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
         
         session = requests.Session()
+        
+        # 如果使用自定义域名解析，需要完全禁用 SSL
+        if CUSTOM_HOST:
+            session.mount('https://', SSLAdapter())
+            logger.info("🔒 使用自定义 SSL 适配器（完全禁用验证）")
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -305,7 +324,7 @@ class LaowangLoginSign:
         # 如果使用自定义域名解析，需要设置 Host 头
         if CUSTOM_HOST:
             headers['Host'] = 'laowang.vip'
-            logger.info(f"🌐 设置 Host 头: laowang.vip")
+            logger.info(f"🌐 设置 Host 头: laowang.vip -> {CUSTOM_HOST}")
         
         session.headers.update(headers)
         
@@ -315,11 +334,9 @@ class LaowangLoginSign:
             session.proxies.update(proxies)
             logger.info(f"🌐 使用代理: {proxies['http']}")
         
-        # 如果禁用SSL验证
-        if not VERIFY_SSL:
-            session.verify = False
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            logger.info("⚠️ SSL证书验证已禁用")
+        # 禁用 SSL 验证和警告
+        session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         return session
     
@@ -539,7 +556,24 @@ class LaowangCookieSign:
         """创建请求会话"""
         import requests
         import urllib3
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.ssl_ import create_urllib3_context
+        
+        # 创建自定义 SSL 上下文（禁用所有验证）
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = create_urllib3_context()
+                context.check_hostname = False
+                context.verify_mode = 0
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
+        
         session = requests.Session()
+        
+        # 如果使用自定义域名解析，需要完全禁用 SSL
+        if CUSTOM_HOST:
+            session.mount('https://', SSLAdapter())
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -559,10 +593,9 @@ class LaowangCookieSign:
             session.proxies.update(proxies)
             logger.info(f"🌐 使用代理: {proxies['http']}")
         
-        # 如果禁用SSL验证
-        if not VERIFY_SSL:
-            session.verify = False
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        # 禁用 SSL 验证和警告
+        session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         return session
     
