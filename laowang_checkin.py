@@ -358,69 +358,29 @@ class LaowangBrowserSign:
             logger.error(f"❌ 浏览器初始化失败: {e}")
             return False
     
-    def _set_cookies(self):
-        """设置 Cookie"""
-        if not self.cookie:
-            return False
-        
-        try:
-            # 先访问基础域名
-            self.page.get(BASE_URL)
-            time.sleep(2)
-            
-            # 解析并设置 Cookie
-            cookie_str = self.cookie.strip()
-            if '\n' in cookie_str:
-                parts = cookie_str.split('\n')
-            else:
-                parts = re.split(r'[;&]', cookie_str)
-            
-            success_count = 0
-            for part in parts:
-                part = part.strip()
-                if '=' in part:
-                    key, value = part.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
-                    # 跳过无效键名和HTTP属性
-                    if key and value and key.lower() not in ['path', 'domain', 'expires', 'httponly', 'secure', 'samesite', 'max-age']:
-                        try:
-                            # 尝试多种域名格式
-                            domains = ['.laowang.vip', 'laowang.vip']
-                            for domain in domains:
-                                try:
-                                    # DrissionPage 使用 add_cookie
-                                    self.page.add_cookie(key, value, domain=domain)
-                                    success_count += 1
-                                    break
-                                except:
-                                    continue
-                        except:
-                            pass
-            
-            logger.info(f"✅ 已设置 {success_count} 个 Cookie")
-            
-            # 设置后直接访问签到页面验证
-            return success_count > 0
-            
-        except Exception as e:
-            logger.error(f"❌ 设置 Cookie 失败: {e}")
-            return False
-    
     def do_sign(self):
         """执行浏览器签到"""
         if not self._init_browser():
             return False, "浏览器初始化失败"
         
         try:
-            # 设置 Cookie
-            if not self._set_cookies():
-                return False, "Cookie 设置失败"
-            
-            # 访问签到页面
+            # 访问签到页面（在get中传入headers）
             logger.info("🌐 正在访问签到页面...")
+            headers = {
+                'Cookie': self.cookie,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36',
+                'Referer': BASE_URL
+            }
+            
+            # 尝试多种方式设置cookie
+            try:
+                # 方式1: 使用set_headers
+                self.page.set.headers(headers)
+            except:
+                pass
+            
             self.page.get(SIGN_PAGE_URL)
-            time.sleep(2)
+            time.sleep(3)
             
             # 检查登录状态
             page_text = self.page.html
