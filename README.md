@@ -40,7 +40,8 @@
 | `baiduwangpan_checkin.py` | 百度网盘签到脚本 | 网盘 | `BAIDU_COOKIE` |
 | `ty_netdisk_checkin.py` | 天翼云盘签到脚本 | 网盘 | `TY_USERNAME` + `TY_PASSWORD` |
 | `ikuuu_checkin.py` | IKUAI 签到脚本 | 其他 | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
-| `laowang-auto-signup-v2.py` | 老王论坛签到脚本 | 论坛 | `LAOWANG_COOKIE` |
+| `laowang-auto-signup-v2.py` | 老王论坛签到脚本（旧版） | 论坛 | `LAOWANG_COOKIE` |
+| `laowang_checkin.py` | 老王论坛签到脚本（新版，推荐） | 论坛 | `LAOWANG_COOKIE` |
 
 所有脚本都可以独立在青龙面板中运行，支持环境变量配置和推送通知。
 
@@ -55,7 +56,7 @@
 | 漫画签到 | `pica_punch.py` + `jm_punch.py` | `PICA_ACCOUNT`, `JM_ACCOUNT` |
 | 网盘签到 | `quark_punch.py` + `aliyunpan_checkin.py` + `baiduwangpan_checkin.py` + `ty_netdisk_checkin.py` | `COOKIE_QUARK`, `ALIYUN_REFRESH_TOKEN`, `BAIDU_COOKIE`, `TY_USERNAME`+`TY_PASSWORD` |
 | 宽带签到 | `ikuuu_checkin.py` | `IKUUU_EMAIL` + `IKUUU_PASSWD` |
-| 论坛签到 | `laowang-auto-signup-v2.py` | `LAOWANG_ACCOUNT` |
+| 论坛签到 | `laowang_checkin.py` | `LAOWANG_COOKIE` |
 | 全平台签到 | 全部脚本 | 对应环境变量 |
 
 ### 2. 部署到青龙面板
@@ -178,16 +179,31 @@ LAOWANG_COOKIE=your_cookie_here
 
 # 多账号用 & 或换行分隔
 LAOWANG_COOKIE=cookie1&cookie2
+
+# 代理配置（如果无法直接访问网站）
+LAOWANG_PROXY=http://127.0.0.1:7890
+# 或使用全局代理
+MY_PROXY=http://127.0.0.1:7890
+
+# 浏览器模式（处理滑块验证时需要）
+LAOWANG_BROWSER=true  # 默认 false，设为 true 启用浏览器模式
 ```
 
-> 💡 **轻量版说明**：使用 Cookie 模式签到，无需安装浏览器，资源占用极低
+> 💡 **双模式说明**：
+> - **Cookie 模式**（默认）：轻量快速，无需安装浏览器
+> - **浏览器模式**：自动处理滑块验证，需要安装 `DrissionPage`
 >
 > **获取 Cookie 方法：**
 > 1. 浏览器登录老王论坛
 > 2. F12 → Network → 任意请求 → Request Headers → 复制 Cookie
 > 3. 添加到环境变量 `LAOWANG_COOKIE`
 >
-> Cookie 有效期较长，失效后重新获取即可
+> ⚠️ **注意**：老王论坛可能需要代理才能访问，如遇到连接错误请配置 `LAOWANG_PROXY`
+> 
+> **安装 DrissionPage（浏览器模式需要）：**
+> ```bash
+> pip install DrissionPage
+> ```
 
 #### 可选配置
 
@@ -228,7 +244,7 @@ DD_BOT_SECRET=secret
 | 百度网盘签到 | `/ql/scripts/baiduwangpan_checkin.py` | `0 9 * * *` | Python |
 | 天翼云盘签到 | `/ql/scripts/ty_netdisk_checkin.py` | `1 16 * * *` | Python |
 | IKUAI签到 | `/ql/scripts/ikuuu_checkin.py` | `0 21 * * *` | Python |
-| 老王论坛签到 | `/ql/scripts/laowang-auto-signup-v2.py` | `0 9 * * *` | Python |
+| 老王论坛签到 | `/ql/scripts/laowang_checkin.py` | `0 9 * * *` | Python |
 
 ### Cron 表达式参考
 
@@ -343,10 +359,11 @@ A: 不同平台获取认证信息的方法：
 - 使用邮箱和密码登录
 - 多个账号用逗号分隔：`邮箱1,邮箱2` 和 `密码1,密码2`
 
-**老王论坛（LAOWANG_ACCOUNT）**：
-- 访问老王论坛（laowang.vip）注册账号
-- 格式：`用户名:密码` 或 `用户名:密码&用户名2:密码2`
-- 兼容格式：`LAOWANG_USER=用户名` + `LAOWANG_PW=密码`
+**老王论坛（LAOWANG_COOKIE）**：
+- 访问老王论坛（laowang.vip）注册账号并登录
+- 格式：从浏览器开发者工具复制完整 Cookie 字符串
+- 多账号用 `&` 或换行分隔
+- 如需处理滑块验证，启用浏览器模式：`LAOWANG_BROWSER=true`
 
 ### Q: 账号登录失败？
 
@@ -363,6 +380,33 @@ A:
 2. 确认 Cookie 格式正确（完整的 Cookie 字符串）
 3. 如果提示需要滑块验证，先在网页上手动签到一次后再试
 4. 检查网络连接是否正常
+5. **如果提示 "Connection refused"，说明网站需要代理才能访问**
+
+### Q: 老王论坛提示 "Connection refused" 或 "连接被拒绝"？
+
+A: 这通常表示网站无法直接访问，需要配置代理。
+
+**解决方法：**
+
+1. **配置代理（推荐）：**
+```bash
+# 方法1：单独配置老王论坛代理
+LAOWANG_PROXY=http://127.0.0.1:7890
+
+# 方法2：使用全局代理（所有脚本通用）
+MY_PROXY=http://127.0.0.1:7890
+```
+
+2. **验证代理是否可用：**
+```bash
+# 在服务器上测试
+curl -x http://127.0.0.1:7890 -I https://laowang.vip
+```
+
+3. **常见代理端口参考：**
+- Clash: `http://127.0.0.1:7890`
+- V2RayN: `http://127.0.0.1:10809`
+- SS/SSR: `socks5://127.0.0.1:1080`
 
 ### Q: 如何获取老王论坛 Cookie？
 
@@ -423,6 +467,13 @@ A: 这通常表示 API 返回的数据结构与脚本预期不符，可能原因
 - 到项目 Issues 页面报告问题
 
 ##  更新日志
+
+### v2.3.0 (2025-02-21)
+- ✨ 重写老王论坛签到脚本 `laowang_checkin.py`
+- 🔧 支持 Cookie / DrissionPage 双模式
+- 🤖 浏览器模式自动处理滑块验证
+- 📊 改进签到状态检测和统计信息提取
+- 📝 更好的错误处理和日志输出
 
 ### v2.2.1 (2024-02-XX)
 - 🚀 老王论坛改为轻量版（Cookie模式），无需浏览器

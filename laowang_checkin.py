@@ -1,0 +1,614 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+老王论坛自动签到脚本（新版 - 支持滑块验证）
+支持两种模式：
+1. DrissionPage 模式（推荐）：自动处理滑块验证
+2. Cookie 模式（备选）：轻量级，仅发送签到请求
+
+cron: 0 9 * * *
+new Env('老王论坛签到')
+"""
+
+import os
+import re
+import sys
+import time
+import random
+import json
+import logging
+from datetime import datetime, timedelta
+from urllib.parse import urljoin, urlparse
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ============ 配置常量 ============
+BASE_URL = "https://laowang.vip"
+SIGN_PAGE_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign"
+SIGN_API_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign&operation=qiandao&format=button_inajax"
+
+# ============ 通知模块 ============
+notify = None
+try:
+    from notify import send
+    notify = send
+    logger.info("✅ 已加载 notify 通知模块")
+except ImportError:
+    logger.warning("⚠️ 未加载通知模块")
+
+def push_notify(title, message):
+    """推送通知"""
+    if notify:
+        try:
+            notify(title, message)
+        except Exception as e:
+            logger.error(f"推送失败: {e}")
+
+# ============ 代理配置 ============
+def get_proxies():
+    """获取代理配置"""
+    proxy = os.getenv('LAOWANG_PROXY') or os.getenv('MY_PROXY', '')
+    if proxy:
+        return {'http': proxy, 'https': proxy}
+    return None
+
+# ============ 时间工具 ============
+def format_time_remaining(seconds):
+    """格式化剩余时间"""
+    if seconds <= 0:
+        return "立即执行"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours > 0:
+        return f"{hours}小时{minutes}分{secs}秒"
+    elif minutes > 0:
+        return f"{minutes}分{secs}秒"
+    return f"{secs}秒"
+
+def wait_countdown(seconds, task_name="签到"):
+    """带倒计时的等待"""
+    if seconds <= 0:
+        return
+    print(f"⏳ {task_name}将在 {format_time_remaining(seconds)} 后开始")
+    remaining = seconds
+    while remaining > 0:
+        if remaining <= 10 or remaining % 30 == 0:
+            print(f"⏳ 倒计时: {format_time_remaining(remaining)}")
+        sleep_time = 1 if remaining <= 10 else min(30, remaining)
+        time.sleep(sleep_time)
+        remaining -= sleep_time
+
+# ============ Cookie 模式 ============
+class LaowangCookieSign:
+    """Cookie 模式签到（轻量版）"""
+    
+    def __init__(self, cookie, index=1):
+        self.cookie = cookie
+        self.index = index
+        self.session = self._create_session()
+        self.username = None
+        
+    def _create_session(self):
+        """创建请求会话"""
+        import requests
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': BASE_URL,
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        })
+        
+        # 设置代理
+        proxies = get_proxies()
+        if proxies:
+            session.proxies.update(proxies)
+            logger.info(f"🌐 使用代理: {proxies['http']}")
+        
+        # 解析 Cookie
+        self._parse_cookie(session)
+        return session
+    
+    def _parse_cookie(self, session):
+        """解析 Cookie 字符串"""
+        if not self.cookie:
+            return
+        
+        # 处理多种分隔符
+        cookie_str = self.cookie.strip()
+        if '\n' in cookie_str:
+            parts = cookie_str.split('\n')
+        else:
+            parts = re.split(r'[;&]', cookie_str)
+        
+        for part in parts:
+            part = part.strip()
+            if '=' in part:
+                key, value = part.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                if key and value:
+                    session.cookies.set(key, value)
+        
+        # 添加额外的请求头
+        session.headers['Cookie'] = self.cookie
+    
+    def get_sign_status(self):
+        """获取签到状态"""
+        import requests
+        
+        try:
+            response = self.session.get(SIGN_PAGE_URL, timeout=30)
+            response.encoding = 'utf-8'
+            html = response.text
+            
+            # 检查登录状态
+            if '登录' in html and '注册' in html and '立即注册' in html:
+                return None, "Cookie 已失效或未登录"
+            
+            # 提取用户名
+            username_patterns = [
+                r'title="访问我的空间">([^<]+)</a>',
+                r'class="username">([^<]+)</',
+                r'uid=\d+">([^<]+)</a>',
+                r'欢迎回来，([^<]+)',
+            ]
+            for pattern in username_patterns:
+                match = re.search(pattern, html)
+                if match:
+                    self.username = match.group(1).strip()
+                    break
+            
+            if not self.username:
+                self.username = f"账号{self.index}"
+            
+            # 检查签到状态
+            # 已签到标识
+            if any(x in html for x in ['btnvisted', '已签到', '今日已签', '今日已领']):
+                # 提取签到统计
+                stats = self._extract_stats(html)
+                return self.username, ('already_signed', stats)
+            
+            # 检查是否有签到按钮
+            if any(x in html for x in ['qiandao', '签到', 'J_chkitot']):
+                # 提取签到链接
+                sign_url = self._extract_sign_url(html)
+                return self.username, ('can_sign', sign_url)
+            
+            # 需要滑块验证
+            if any(x in html for x in ['验证', 'captcha', '滑块', '安全验证']):
+                return self.username, 'need_captcha'
+            
+            return self.username, 'unknown'
+            
+        except requests.exceptions.ProxyError as e:
+            return None, f"代理错误: {str(e)[:100]}"
+        except requests.exceptions.Timeout:
+            return None, "请求超时"
+        except requests.exceptions.ConnectionError as e:
+            return None, f"连接错误: {str(e)[:100]}"
+        except Exception as e:
+            return None, f"请求异常: {str(e)[:100]}"
+    
+    def _extract_stats(self, html):
+        """提取签到统计信息"""
+        stats = {}
+        
+        # 从 input 隐藏字段提取
+        patterns = {
+            'lxdays': r'<input[^>]*id=["\']lxdays["\'][^>]*value=["\'](\d+)["\']',
+            'lxlevel': r'<input[^>]*id=["\']lxlevel["\'][^>]*value=["\'](\d+)["\']',
+            'lxreward': r'<input[^>]*id=["\']lxreward["\'][^>]*value=["\']([^"\']+)["\']',
+            'lxtdays': r'<input[^>]*id=["\']lxtdays["\'][^>]*value=["\'](\d+)["\']',
+        }
+        
+        for key, pattern in patterns.items():
+            match = re.search(pattern, html)
+            if match:
+                stats[key] = match.group(1)
+            else:
+                # 尝试从文本中提取
+                text_patterns = {
+                    'lxdays': r'连续签到[：:]?\s*(\d+)\s*天',
+                    'lxlevel': r'等级[：:]?\s*(\d+)',
+                    'lxtdays': r'总签到[：:]?\s*(\d+)\s*天',
+                }
+                if key in text_patterns:
+                    match = re.search(text_patterns[key], html)
+                    if match:
+                        stats[key] = match.group(1)
+        
+        return stats
+    
+    def _extract_sign_url(self, html):
+        """提取签到链接"""
+        # 从按钮 onclick 中提取
+        onclick_pattern = r'<a[^>]*onclick=["\'][^"\']*?(plugin\.php\?id=k_misign:sign[^"\']+)["\']'
+        match = re.search(onclick_pattern, html)
+        if match:
+            url = match.group(1)
+            if not url.startswith('http'):
+                url = urljoin(BASE_URL, url)
+            return url
+        
+        # 从 href 中提取
+        href_pattern = r'href=["\']([^"\']*operation=qiandao[^"\']*)["\']'
+        match = re.search(href_pattern, html)
+        if match:
+            url = match.group(1)
+            if not url.startswith('http'):
+                url = urljoin(BASE_URL, url)
+            return url
+        
+        # 默认签到链接
+        return SIGN_API_URL
+    
+    def do_sign(self):
+        """执行签到"""
+        import requests
+        
+        username, status = self.get_sign_status()
+        
+        if status == "Cookie 已失效或未登录":
+            return False, "❌ Cookie 已失效，请重新获取"
+        
+        if not username:
+            return False, f"❌ {status}"
+        
+        # 已签到
+        if isinstance(status, tuple) and status[0] == 'already_signed':
+            stats = status[1] if len(status) > 1 else {}
+            msg = f"✅ {username} 今日已签到"
+            if stats:
+                msg += f"\n   连续签到: {stats.get('lxdays', '-')} 天"
+                msg += f" | 总签到: {stats.get('lxtdays', '-')} 天"
+                msg += f" | 等级: Lv.{stats.get('lxlevel', '-')}"
+            return True, msg
+        
+        # 需要滑块验证
+        if status == 'need_captcha':
+            return False, f"⚠️ {username} 需要滑块验证，建议切换到浏览器模式"
+        
+        # 可以签到
+        if isinstance(status, tuple) and status[0] == 'can_sign':
+            sign_url = status[1] if len(status) > 1 else SIGN_API_URL
+            
+            try:
+                logger.info(f"📝 正在请求签到: {sign_url[:80]}...")
+                
+                response = self.session.get(sign_url, timeout=30)
+                response.encoding = 'utf-8'
+                
+                # 检查响应
+                resp_text = response.text
+                
+                # 成功标识
+                if any(x in resp_text for x in ['成功', '签到成功', '恭喜', 'CDATA']):
+                    return True, f"✅ {username} 签到成功"
+                
+                # 已签到
+                if any(x in resp_text for x in ['已经签到', '已签到', '今日已签']):
+                    return True, f"✅ {username} 今日已签到"
+                
+                # 需要验证
+                if any(x in resp_text for x in ['验证', 'captcha', '滑块', '安全验证']):
+                    return False, f"⚠️ {username} 需要滑块验证"
+                
+                return False, f"❌ {username} 签到响应异常"
+                
+            except Exception as e:
+                return False, f"❌ {username} 签到请求失败: {str(e)[:100]}"
+        
+        return False, f"❌ {username} 未知状态: {status}"
+
+
+# ============ DrissionPage 模式 ============
+class LaowangBrowserSign:
+    """浏览器模式签到（支持滑块验证）"""
+    
+    def __init__(self, cookie, index=1):
+        self.cookie = cookie
+        self.index = index
+        self.username = f"账号{index}"
+        self.page = None
+        
+    def _init_browser(self):
+        """初始化浏览器"""
+        try:
+            from DrissionPage import ChromiumPage, ChromiumOptions
+            
+            # 配置浏览器选项
+            co = ChromiumOptions()
+            co.headless(True)  # 无头模式
+            co.set_argument('--no-sandbox')
+            co.set_argument('--disable-gpu')
+            co.set_argument('--disable-dev-shm-usage')
+            co.set_argument('--disable-setuid-sandbox')
+            co.set_argument('--disable-blink-features=AutomationControlled')
+            co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36')
+            
+            # 设置代理
+            proxies = get_proxies()
+            if proxies:
+                proxy_url = proxies.get('http', '')
+                if proxy_url:
+                    co.set_proxy(proxy_url)
+            
+            self.page = ChromiumPage(co)
+            return True
+            
+        except ImportError:
+            logger.error("❌ 未安装 DrissionPage，请运行: pip install DrissionPage")
+            return False
+        except Exception as e:
+            logger.error(f"❌ 浏览器初始化失败: {e}")
+            return False
+    
+    def _set_cookies(self):
+        """设置 Cookie"""
+        if not self.cookie:
+            return False
+        
+        try:
+            # 先访问基础域名
+            self.page.get(BASE_URL)
+            time.sleep(1)
+            
+            # 解析并设置 Cookie
+            cookie_str = self.cookie.strip()
+            if '\n' in cookie_str:
+                parts = cookie_str.split('\n')
+            else:
+                parts = re.split(r'[;&]', cookie_str)
+            
+            for part in parts:
+                part = part.strip()
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key and value and key not in ['path', 'domain', 'expires', 'HttpOnly', 'Secure', 'SameSite']:
+                        try:
+                            self.page.set_cookies({
+                                'name': key,
+                                'value': value,
+                                'domain': '.laowang.vip'
+                            })
+                        except:
+                            pass
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 设置 Cookie 失败: {e}")
+            return False
+    
+    def do_sign(self):
+        """执行浏览器签到"""
+        if not self._init_browser():
+            return False, "浏览器初始化失败"
+        
+        try:
+            # 设置 Cookie
+            if not self._set_cookies():
+                return False, "Cookie 设置失败"
+            
+            # 访问签到页面
+            logger.info("🌐 正在访问签到页面...")
+            self.page.get(SIGN_PAGE_URL)
+            time.sleep(2)
+            
+            # 检查登录状态
+            page_text = self.page.html
+            if '登录' in page_text and '注册' in page_text:
+                return False, "❌ Cookie 已失效"
+            
+            # 提取用户名
+            try:
+                username_elem = self.page.ele('css:a[title="访问我的空间"]', timeout=2)
+                if username_elem:
+                    self.username = username_elem.text
+            except:
+                pass
+            
+            # 检查是否已签到
+            if any(x in page_text for x in ['btnvisted', '已签到', '今日已签']):
+                return True, f"✅ {self.username} 今日已签到"
+            
+            # 查找签到按钮
+            try:
+                # 尝试多种选择器
+                sign_selectors = [
+                    'css:a.J_chkitot',
+                    'css:a[onclick*="qiandao"]',
+                    'css:#fx_checkin_b a',
+                    'css:.btn.J_chkitot',
+                    'css:a[href*="operation=qiandao"]',
+                ]
+                
+                sign_btn = None
+                for selector in sign_selectors:
+                    try:
+                        sign_btn = self.page.ele(selector, timeout=2)
+                        if sign_btn:
+                            break
+                    except:
+                        continue
+                
+                if not sign_btn:
+                    return False, f"❌ {self.username} 未找到签到按钮"
+                
+                # 点击签到
+                logger.info("🖱️  正在点击签到按钮...")
+                sign_btn.click()
+                time.sleep(3)
+                
+                # 检查是否有滑块验证
+                page_text = self.page.html
+                if '验证' in page_text or 'captcha' in page_text.lower():
+                    logger.info("🤖 检测到滑块验证，尝试自动处理...")
+                    
+                    # 尝试点击滑块
+                    try:
+                        slider = self.page.ele('css:.tncode', timeout=3)
+                        if slider:
+                            slider.click()
+                            time.sleep(2)
+                    except:
+                        pass
+                    
+                    # 等待验证完成
+                    for i in range(10):
+                        time.sleep(2)
+                        page_text = self.page.html
+                        if any(x in page_text for x in ['成功', '已签到', '恭喜']):
+                            break
+                
+                # 检查结果
+                page_text = self.page.html
+                if any(x in page_text for x in ['成功', '已签到', '恭喜', '签到成功']):
+                    return True, f"✅ {self.username} 签到成功"
+                elif '已经' in page_text or '已签' in page_text:
+                    return True, f"✅ {self.username} 今日已签到"
+                else:
+                    return False, f"⚠️ {self.username} 签到结果未知，请手动检查"
+                    
+            except Exception as e:
+                return False, f"❌ {self.username} 签到操作失败: {str(e)[:100]}"
+                
+        finally:
+            # 关闭浏览器
+            if self.page:
+                try:
+                    self.page.quit()
+                except:
+                    pass
+
+
+# ============ 主程序 ============
+def parse_cookies(cookie_str):
+    """解析多账号 Cookie"""
+    if not cookie_str:
+        return []
+    
+    # 支持换行或 & 分隔
+    cookies = re.split(r'[\n&]', cookie_str.strip())
+    return [c.strip() for c in cookies if c.strip()]
+
+def main():
+    """主函数"""
+    print("""
+╔══════════════════════════════════════════╗
+║     老王论坛自动签到脚本 v3.0             ║
+║     支持 Cookie / DrissionPage 双模式    ║
+╚══════════════════════════════════════════╝
+""")
+    
+    print(f"⏰ 开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    
+    # 随机延迟
+    max_delay = int(os.getenv('MAX_RANDOM_DELAY', '300'))
+    use_random = os.getenv('RANDOM_SIGNIN', 'true').lower() == 'true'
+    
+    if use_random and max_delay > 0:
+        delay = random.randint(0, max_delay)
+        wait_countdown(delay, "老王论坛签到")
+    
+    # 获取配置
+    cookie_str = os.getenv('LAOWANG_COOKIE', '').strip()
+    use_browser = os.getenv('LAOWANG_BROWSER', 'false').lower() == 'true'
+    
+    if not cookie_str:
+        error_msg = """❌ 未配置 LAOWANG_COOKIE 环境变量
+
+🔧 获取 Cookie 方法:
+1. 浏览器登录老王论坛: https://laowang.vip
+2. 按 F12 → Network → 任意请求 → Request Headers → 复制 Cookie
+3. 添加到青龙环境变量 LAOWANG_COOKIE
+
+💡 多账号用 & 或换行分隔:
+LAOWANG_COOKIE=cookie1&cookie2
+
+🌐 如需要代理:
+LAOWANG_PROXY=http://127.0.0.1:7890
+
+🤖 如需处理滑块验证，启用浏览器模式:
+LAOWANG_BROWSER=true
+（需安装: pip install DrissionPage）
+"""
+        print(error_msg)
+        push_notify("老王论坛签到失败", error_msg)
+        sys.exit(1)
+    
+    # 解析多账号
+    cookies = parse_cookies(cookie_str)
+    print(f"✅ 检测到 {len(cookies)} 个账号\n")
+    
+    # 签到结果
+    results = []
+    
+    for idx, cookie in enumerate(cookies, 1):
+        print(f"{'─' * 50}")
+        print(f"🙍🏻 账号 {idx}/{len(cookies)}")
+        print(f"{'─' * 50}")
+        
+        # 选择签到模式
+        if use_browser:
+            try:
+                signer = LaowangBrowserSign(cookie, idx)
+                success, msg = signer.do_sign()
+            except Exception as e:
+                success = False
+                msg = f"❌ 浏览器模式失败: {str(e)[:100]}，尝试 Cookie 模式..."
+                print(msg)
+                # 失败时回退到 Cookie 模式
+                signer = LaowangCookieSign(cookie, idx)
+                success, msg = signer.do_sign()
+        else:
+            signer = LaowangCookieSign(cookie, idx)
+            success, msg = signer.do_sign()
+        
+        results.append((idx, success, msg))
+        print(msg)
+        
+        # 账号间延迟
+        if idx < len(cookies):
+            delay = random.uniform(3, 8)
+            print(f"\n⏱️ 等待 {delay:.1f} 秒后处理下一个账号...")
+            time.sleep(delay)
+    
+    # 汇总结果
+    print(f"\n{'─' * 50}")
+    print(f"📊 签到汇总")
+    print(f"{'─' * 50}")
+    
+    success_count = sum(1 for _, success, _ in results if success)
+    
+    summary = f"成功: {success_count}/{len(cookies)}\n"
+    for idx, success, msg in results:
+        status = "✅" if success else "❌"
+        summary += f"\n{status} 账号{idx}: {msg.split(chr(10))[0]}"
+    
+    print(summary)
+    print(f"\n⏰ 结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 推送通知
+    push_notify("老王论坛签到结果", summary)
+
+
+if __name__ == "__main__":
+    main()
