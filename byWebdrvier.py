@@ -320,8 +320,7 @@ def get_accounts():
     
     # 支持多账号（用@或换行分隔）
     accounts = []
-    raw_accounts = re.split(r'[@
-]', cookie_env)
+    raw_accounts = re.split(r'[@\n]', cookie_env)
     
     for raw in raw_accounts:
         raw = raw.strip()
