@@ -310,7 +310,8 @@ class SouthPlusSigner:
     def check_ongoing_tasks(self):
         """检查进行中的任务状态"""
         try:
-            ongoing_tab = self.browser.ele('xpath://*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td')
+            # 尝试找到"进行中的任务"标签
+            ongoing_tab = self.browser.ele('xpath://*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td', timeout=3)
             ongoing_tab.click()
             time.sleep(2)
             
@@ -318,8 +319,9 @@ class SouthPlusSigner:
             if 'both_15' in page_html or 'both_14' in page_html:
                 print("🔍 检测到有进行中的任务，尝试完成...")
                 self.complete_tasks()
-        except Exception as e:
-            print(f"ℹ️ 没有进行中的任务或检查失败: {e}")
+        except Exception:
+            # 页面结构可能不同，静默忽略
+            pass
 
 
 def main():
