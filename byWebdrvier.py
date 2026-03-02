@@ -193,30 +193,70 @@ class SouthPlusSigner:
             return self.result
         
         try:
+            # 先访问主页设置Cookie（必须在同域名下才能设置cookie）
+            print(f"🌐 正在访问网站...")
+            self.browser.get('https://www.south-plus.net')
+            time.sleep(2)
+            
+            # 添加Cookie (通过DrissionPage API)
+            print(f"🍪 正在添加Cookie...")
+            try:
+                # 转换为DrissionPage需要的格式
+                cookie_list = []
+                for name, value in self.cookies.items():
+                    cookie_list.append({
+                        'name': name,
+                        'value': value,
+                        'domain': '.south-plus.net',
+                        'path': '/'
+                    })
+                
+                # 使用set.cookies()方法
+                if hasattr(self.browser, 'set') and hasattr(self.browser.set, 'cookies'):
+                    self.browser.set.cookies(cookie_list)
+                else:
+                    # 备选：通过JavaScript逐个设置
+                    for name, value in self.cookies.items():
+                        try:
+                            # 如果value包含特殊字符，保持原样
+                            cookie_js = f'document.cookie = "{name}={value}; domain=.south-plus.net; path=/"'
+                            self.browser.run_js(cookie_js)
+                        except Exception as e:
+                            print(f"⚠️ 添加Cookie [{name}] 失败: {e}")
+            except Exception as e:
+                print(f"⚠️ 设置Cookie失败: {e}")
+            
+            # 验证cookie是否设置成功
+            time.sleep(1)
+            current_cookies = self.browser.run_js('return document.cookie')
+            print(f"🔍 当前页面Cookie: {current_cookies[:100]}...")
+            
             # 访问任务页面
             url = 'https://www.south-plus.net/plugin.php?H_name-tasks.html.html'
             print(f"🌐 正在访问任务页面...")
-            self.browser.get(url)
-            time.sleep(2)
-            
-            # 添加Cookie (通过JavaScript)
-            print(f"🍪 正在添加Cookie...")
-            for name, value in self.cookies.items():
-                try:
-                    cookie_js = f'document.cookie = "{name}={value}; domain=.south-plus.net; path=/;"'
-                    self.browser.run_js(cookie_js)
-                except Exception as e:
-                    print(f"⚠️ 添加Cookie [{name}] 失败: {e}")
-            
-            # 重新加载页面
             self.browser.get(url)
             time.sleep(3)
             
             # 检查登录状态
             page_html = self.browser.html
-            if 'login' in page_html.lower() or '登录' in page_html:
+            current_url = self.browser.url
+            print(f"🔍 当前页面URL: {current_url}")
+            print(f"🔍 页面长度: {len(page_html)} 字符")
+            
+            # 检查页面内容判断是否登录
+            has_login = 'login' in page_html.lower() or '登录' in page_html
+            has_logout = 'logout' in page_html.lower() or '退出' in page_html
+            has_userinfo = 'eb9e6_winduser' in page_html or '访问我的空间' in page_html
+            
+            print(f"🔍 页面包含'登录': {has_login}")
+            print(f"🔍 页面包含'退出': {has_logout}")
+            print(f"🔍 页面包含用户信息: {has_userinfo}")
+            
+            if has_login and not has_logout:
                 self.result['message'] = 'Cookie已失效，请重新获取'
                 print(f"❌ {self.result['message']}")
+                # 打印页面部分内容帮助调试
+                print(f"🔍 页面内容预览: {page_html[:500]}...")
                 return self.result
             
             # 解析页面获取任务状态
