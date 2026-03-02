@@ -8,7 +8,7 @@ cron: 0 9 * * *
 new Env('SouthPlus签到')
 
 环境变量配置:
-- SOUTHPLUS_COOKIE: 论坛Cookie (JSON格式)
+- SOUTHPLUS_COOKIE: 论坛Cookie (直接复制浏览器中的cookie字符串，格式如: name=value; name2=value2)
 - MAX_RANDOM_DELAY: 最大随机延迟秒数 (默认3600)
 - RANDOM_SIGNIN: 是否启用随机延迟 (默认true)
 - PRIVACY_MODE: 隐私保护模式 (默认true)
@@ -17,11 +17,9 @@ Cookie获取方法:
 1. 登录 https://www.south-plus.net/
 2. 按F12打开开发者工具
 3. 切换到 Application/Storage 标签 → Cookies
-4. 复制所有cookie为JSON格式
+4. 复制所有cookie（右键→Copy all），直接粘贴到环境变量
 """
 
-import json
-import requests
 import time
 import os
 import random
@@ -147,26 +145,37 @@ def init_browser():
         return None
 
 
-def parse_cookie(cookie_str):
-    """解析Cookie JSON字符串"""
+def parse_cookie_string(cookie_str):
+    """解析Cookie字符串 (name=value; name2=value2 格式)"""
     if not cookie_str:
-        return None
+        return {}
     
-    try:
-        cookies = json.loads(cookie_str.strip())
-        if isinstance(cookies, list) and len(cookies) > 0:
-            return cookies
-    except json.JSONDecodeError as e:
-        print(f"❌ Cookie JSON解析失败: {e}")
+    cookies = {}
+    # 处理多行cookie，合并为一行
+    cookie_str = cookie_str.replace('\n', '; ').strip()
     
-    return None
+    # 按分号分割
+    items = cookie_str.split(';')
+    
+    for item in items:
+        item = item.strip()
+        if not item or '=' not in item:
+            continue
+        # 只分割第一个等号
+        name, value = item.split('=', 1)
+        name = name.strip()
+        value = value.strip()
+        if name:
+            cookies[name] = value
+    
+    return cookies
 
 
 class SouthPlusSigner:
     """South Plus 签到类"""
     
-    def __init__(self, cookies):
-        self.cookies = cookies
+    def __init__(self, cookies_dict):
+        self.cookies = cookies_dict
         self.browser = None
         self.result = {
             'success': False,
@@ -190,18 +199,14 @@ class SouthPlusSigner:
             self.browser.get(url)
             time.sleep(2)
             
-            # 添加Cookie
-            for cookie in self.cookies:
+            # 添加Cookie (通过JavaScript)
+            print(f"🍪 正在添加Cookie...")
+            for name, value in self.cookies.items():
                 try:
-                    cookie_dict = {
-                        'name': cookie.get('name', ''),
-                        'value': cookie.get('value', ''),
-                        'domain': cookie.get('domain', '.south-plus.net'),
-                        'path': cookie.get('path', '/'),
-                    }
-                    self.browser.set_cookies(cookie_dict)
+                    cookie_js = f'document.cookie = "{name}={value}; domain=.south-plus.net; path=/;"'
+                    self.browser.run_js(cookie_js)
                 except Exception as e:
-                    print(f"⚠️ 添加Cookie失败: {e}")
+                    print(f"⚠️ 添加Cookie [{name}] 失败: {e}")
             
             # 重新加载页面
             self.browser.get(url)
@@ -331,22 +336,25 @@ def main():
 
 🔧 配置方法:
 设置环境变量 SOUTHPLUS_COOKIE
-Cookie格式: JSON数组格式
 
 💡 Cookie获取方法:
 1. 登录 https://www.south-plus.net/
 2. 按F12打开开发者工具
 3. 切换到 Application/Storage 标签 → Cookies
-4. 复制所有cookie为JSON格式
+4. 右键点击 Cookie 列表 → Copy all
+5. 直接粘贴到环境变量值中
+
+Cookie格式示例:
+eb9e6_winduser=xxx; eb9e6_cknum=xxx; other_cookie=value
 """
         print(error_msg)
         notify_user("SouthPlus签到失败", error_msg)
         return
     
     # 解析Cookie
-    cookies = parse_cookie(cookie_str)
+    cookies = parse_cookie_string(cookie_str)
     if not cookies:
-        error_msg = "❌ Cookie解析失败，请检查JSON格式是否正确"
+        error_msg = "❌ Cookie解析失败，请检查格式"
         print(error_msg)
         print(f"   Cookie内容预览: {cookie_str[:100]}...")
         notify_user("SouthPlus签到失败", error_msg)
