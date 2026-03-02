@@ -8,38 +8,33 @@ cron: 0 9 * * *
 new Env('SouthPlus签到')
 
 环境变量配置:
-- SOUTHPLUS_COOKIE: 论坛Cookie (JSON格式，多账号用@或换行分隔)
-- SOUTHPLUS_SERVERKEY: Server酱SendKey (可选，用于推送通知)
+- SOUTHPLUS_COOKIE: 论坛Cookie (JSON格式)
 - MAX_RANDOM_DELAY: 最大随机延迟秒数 (默认3600)
 - RANDOM_SIGNIN: 是否启用随机延迟 (默认true)
 - PRIVACY_MODE: 隐私保护模式 (默认true)
+- CHROMEDRIVER_PATH: ChromeDriver路径 (默认/usr/local/bin/chromedriver)
 
 Cookie获取方法:
 1. 登录 https://www.south-plus.net/
 2. 按F12打开开发者工具
-3. 切换到 Application/Storage 标签
-4. 复制Cookie并转换为JSON格式
+3. 切换到 Application/Storage 标签 → Cookies
+4. 复制所有cookie为JSON格式
 """
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from bs4 import BeautifulSoup
 import json
 import requests
 import time
 import os
 import random
-import re
 from datetime import datetime, timedelta
 
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
-send = None
 try:
     from notify import send
     hadsend = True
@@ -48,8 +43,6 @@ except ImportError:
     print("⚠️  未加载通知模块，跳过通知功能")
 
 # ---------------- 配置项 ----------------
-
-
 # 随机延迟配置
 max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
 random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
@@ -99,9 +92,6 @@ def notify_user(title, content):
         print(f"📢 {title}\n📄 {content}")
 
 
-
-
-
 def init_driver():
     """初始化WebDriver"""
     chrome_options = Options()
@@ -120,57 +110,29 @@ def init_driver():
         return driver
     except Exception as e:
         print(f"❌ WebDriver初始化失败: {e}")
-        print(f"💡 请检查ChromeDriver路径: {CHROMEDRIVER_PATH}")
         return None
 
 
-def parse_cookies(cookie_str):
-    """解析Cookie字符串为JSON列表"""
+def parse_cookie(cookie_str):
+    """解析Cookie JSON字符串"""
     if not cookie_str:
         return None
     
     try:
-        # 尝试直接解析JSON
-        return json.loads(cookie_str)
-    except json.JSONDecodeError:
-        pass
-    
-    # 如果不是JSON格式，尝试解析为字典格式
-    cookies = []
-    try:
-        # 尝试按分号分隔的cookie字符串解析
-        if ';' in cookie_str:
-            for item in cookie_str.split(';'):
-                item = item.strip()
-                if '=' in item:
-                    name, value = item.split('=', 1)
-                    cookies.append({
-                        'name': name.strip(),
-                        'value': value.strip(),
-                        'domain': '.south-plus.net'
-                    })
+        cookies = json.loads(cookie_str.strip())
+        if isinstance(cookies, list) and len(cookies) > 0:
             return cookies
-    except Exception as e:
-        print(f"❌ Cookie解析失败: {e}")
+    except json.JSONDecodeError as e:
+        print(f"❌ Cookie JSON解析失败: {e}")
     
     return None
-
-
-def mask_username(username):
-    """用户名脱敏"""
-    if not privacy_mode or not username:
-        return username
-    if len(username) <= 2:
-        return "*" * len(username)
-    return f"{username[0]}{'*' * (len(username) - 2)}{username[-1]}"
 
 
 class SouthPlusSigner:
     """South Plus 签到类"""
     
-    def __init__(self, cookies, account_index=1):
+    def __init__(self, cookies):
         self.cookies = cookies
-        self.account_index = account_index
         self.driver = None
         self.result = {
             'success': False,
@@ -181,8 +143,6 @@ class SouthPlusSigner:
     
     def run(self):
         """执行签到流程"""
-        print(f"\n======== ▷ 第 {self.account_index} 个账号 ◁ ========")
-        
         # 初始化WebDriver
         self.driver = init_driver()
         if not self.driver:
@@ -199,7 +159,6 @@ class SouthPlusSigner:
             # 添加Cookie
             for cookie in self.cookies:
                 try:
-                    # 确保cookie包含必要的字段
                     if 'domain' not in cookie:
                         cookie['domain'] = '.south-plus.net'
                     self.driver.add_cookie(cookie)
@@ -310,29 +269,6 @@ class SouthPlusSigner:
             print(f"ℹ️ 没有进行中的任务或检查失败: {e}")
 
 
-def get_accounts():
-    """获取所有账号配置"""
-    # 获取Cookie环境变量（支持新的变量名和旧的变量名）
-    cookie_env = os.environ.get('SOUTHPLUS_COOKIE') or os.environ.get('COOKIE', '')
-    
-    if not cookie_env:
-        return []
-    
-    # 支持多账号（用@或换行分隔）
-    accounts = []
-    raw_accounts = re.split(r'[@\n]', cookie_env)
-    
-    for raw in raw_accounts:
-        raw = raw.strip()
-        if not raw:
-            continue
-        cookies = parse_cookies(raw)
-        if cookies:
-            accounts.append(cookies)
-    
-    return accounts
-
-
 def main():
     """主程序入口"""
     print(f"==== SouthPlus签到开始 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
@@ -347,82 +283,70 @@ def main():
             print(f"🎲 随机延迟: {format_time_remaining(delay_seconds)}")
             wait_with_countdown(delay_seconds, "SouthPlus签到")
     
-    # 获取账号列表
-    accounts = get_accounts()
+    # 获取Cookie
+    cookie_str = os.environ.get('SOUTHPLUS_COOKIE', '')
     
-    if not accounts:
-        error_msg = """❌ 未找到有效的Cookie配置
+    if not cookie_str:
+        error_msg = """❌ 未找到Cookie配置
 
 🔧 配置方法:
-1. 设置环境变量 SOUTHPLUS_COOKIE (推荐使用)
-2. 或设置旧版环境变量 COOKIE
-3. Cookie格式: JSON格式 或 分号分隔的字符串
-4. 多账号用 @ 或换行分隔
+设置环境变量 SOUTHPLUS_COOKIE
+Cookie格式: JSON数组格式
 
 💡 Cookie获取方法:
 1. 登录 https://www.south-plus.net/
 2. 按F12打开开发者工具
-3. 切换到 Application/Storage 标签
-4. 复制Cookie值
+3. 切换到 Application/Storage 标签 → Cookies
+4. 复制所有cookie为JSON格式
 """
         print(error_msg)
         notify_user("SouthPlus签到失败", error_msg)
         return
     
-    print(f"📝 共发现 {len(accounts)} 个账号")
+    # 解析Cookie
+    cookies = parse_cookie(cookie_str)
+    if not cookies:
+        error_msg = "❌ Cookie解析失败，请检查JSON格式是否正确"
+        print(error_msg)
+        print(f"   Cookie内容预览: {cookie_str[:100]}...")
+        notify_user("SouthPlus签到失败", error_msg)
+        return
     
-    success_count = 0
-    total_count = len(accounts)
-    results = []
+    print(f"📝 成功解析Cookie，包含 {len(cookies)} 个cookie项")
     
-    for index, cookies in enumerate(accounts, 1):
-        signer = SouthPlusSigner(cookies, index)
-        result = signer.run()
-        
-        if result['success']:
-            success_count += 1
-        
-        results.append({
-            'index': index,
-            'success': result['success'],
-            'daily': result['daily'],
-            'weekly': result['weekly'],
-            'message': result['message']
-        })
-        
-        # 账号间随机延迟
-        if index < len(accounts):
-            delay = random.uniform(5, 15)
-            print(f"\n⏱️ 随机等待 {delay:.1f} 秒后处理下一个账号...")
-            time.sleep(delay)
+    # 执行签到
+    signer = SouthPlusSigner(cookies)
+    result = signer.run()
     
-    # 生成汇总报告
-    summary_msg = f"""📊 SouthPlus签到汇总
+    # 生成报告
+    if result['success']:
+        status_icon = "✅"
+        daily_icon = "📅" if result['daily'] else ""
+        weekly_icon = "📆" if result['weekly'] else ""
+        summary_msg = f"""📊 SouthPlus签到结果
 
-📈 总计: {total_count}个账号
-✅ 成功: {success_count}个
-❌ 失败: {total_count - success_count}个
-📊 成功率: {success_count/total_count*100:.1f}%
-⏰ 完成时间: {datetime.now().strftime('%m-%d %H:%M')}
+{status_icon} 签到成功
+{daily_icon}{weekly_icon} {result['message']}
+⏰ 完成时间: {datetime.now().strftime('%m-%d %H:%M')}"""
+        
+        print(f"\n{'='*50}")
+        print(summary_msg)
+        print(f"{'='*50}")
+        
+        notify_user("SouthPlus签到完成", summary_msg)
+    else:
+        error_msg = f"""❌ SouthPlus签到失败
 
-📋 详细结果:"""
+错误信息: {result['message']}
+⏰ 时间: {datetime.now().strftime('%m-%d %H:%M')}"""
+        
+        print(f"\n{'='*50}")
+        print(error_msg)
+        print(f"{'='*50}")
+        
+        notify_user("SouthPlus签到失败", error_msg)
     
-    for r in results:
-        status_icon = "✅" if r['success'] else "❌"
-        daily_icon = "📅" if r['daily'] else ""
-        weekly_icon = "📆" if r['weekly'] else ""
-        summary_msg += f"\n{status_icon} 账号{r['index']}: {daily_icon}{weekly_icon} {r['message']}"
-    
-    print(f"\n{'='*50}")
-    print(summary_msg)
-    print(f"{'='*50}")
-    
-    # 发送汇总通知
-    notify_user("SouthPlus签到完成", summary_msg)
-    
-
-    
-    print(f"\n==== SouthPlus签到完成 - 成功{success_count}/{total_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
+    print(f"\n==== SouthPlus签到结束 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
 
 
 if __name__ == "__main__":
