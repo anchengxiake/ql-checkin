@@ -1,31 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-South Plus 论坛自动签到脚本
+South Plus 论坛自动签到脚本 (Selenium版)
 支持青龙面板运行
 
 cron: 0 9 * * *
 new Env('SouthPlus签到')
 
 环境变量配置:
-- SOUTHPLUS_COOKIE: 论坛Cookie (直接复制浏览器中的cookie字符串)
+- SOUTHPLUS_COOKIE: 论坛Cookie (JSON格式，从浏览器复制)
 - MAX_RANDOM_DELAY: 最大随机延迟秒数 (默认3600)
 - RANDOM_SIGNIN: 是否启用随机延迟 (默认true)
 - PRIVACY_MODE: 隐私保护模式 (默认true)
-
-Cookie获取方法:
-1. 登录 https://www.south-plus.net/
-2. 按F12打开开发者工具
-3. 切换到 Network 标签
-4. 刷新页面，点击第一个请求
-5. 在 Request Headers 中找到 Cookie，复制全部内容
+- CHROMEDRIVER_PATH: ChromeDriver路径 (可选，自动检测)
 """
 
+import json
 import time
 import os
 import random
 import subprocess
 from datetime import datetime, timedelta
+
+# Selenium 导入
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
@@ -82,21 +84,27 @@ def notify_user(title, content):
         print(f"📢 {title}\n📄 {content}")
 
 
-def find_chrome():
-    """查找系统已安装的 Chrome/Chromium"""
-    possible_paths = [
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chrome',
-        '/usr/bin/google-chrome',
-    ]
+def find_chromedriver():
+    """查找 ChromeDriver"""
+    # 1. 检查环境变量
+    env_path = os.getenv('CHROMEDRIVER_PATH', '')
+    if env_path and os.path.exists(env_path):
+        return env_path
     
+    # 2. 常见路径
+    possible_paths = [
+        '/usr/bin/chromedriver',
+        '/usr/local/bin/chromedriver',
+        '/usr/lib/chromedriver',
+        '/opt/chromedriver',
+    ]
     for path in possible_paths:
         if os.path.exists(path):
             return path
     
+    # 3. which 命令查找
     try:
-        result = subprocess.run(['which', 'chromium'], capture_output=True, text=True)
+        result = subprocess.run(['which', 'chromedriver'], capture_output=True, text=True)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except:
@@ -105,61 +113,56 @@ def find_chrome():
     return None
 
 
-def init_browser():
-    """初始化浏览器"""
+def init_driver():
+    """初始化 WebDriver"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    chromedriver_path = find_chromedriver()
+    
     try:
-        from DrissionPage import ChromiumPage, ChromiumOptions
+        if chromedriver_path:
+            print(f"✅ 使用 ChromeDriver: {chromedriver_path}")
+            service = Service(chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        else:
+            print("⚠️ 未找到 ChromeDriver，尝试自动检测...")
+            driver = webdriver.Chrome(options=chrome_options)
         
-        chrome_path = find_chrome()
-        if chrome_path:
-            print(f"✅ 找到系统浏览器: {chrome_path}")
-        
-        co = ChromiumOptions()
-        if chrome_path:
-            co.set_browser_path(chrome_path)
-        
-        co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        co.set_argument('--no-sandbox')
-        co.set_argument('--disable-gpu')
-        co.set_argument('--disable-dev-shm-usage')
-        co.headless(True)
-        co.auto_port()
-        
-        browser = ChromiumPage(co)
-        return browser
+        driver.set_page_load_timeout(30)
+        driver.implicitly_wait(10)
+        return driver
     except Exception as e:
-        print(f"❌ 浏览器初始化失败: {e}")
+        print(f"❌ WebDriver 初始化失败: {e}")
+        print(f"💡 请确保已安装 ChromeDriver: apk add chromium-chromedriver")
         return None
 
 
-def parse_cookie_string(cookie_str):
-    """解析Cookie字符串"""
+def parse_cookie_json(cookie_str):
+    """解析 JSON 格式 Cookie"""
     if not cookie_str:
-        return {}
-    
-    cookies = {}
-    cookie_str = cookie_str.replace('\n', '; ').strip()
-    items = cookie_str.split(';')
-    
-    for item in items:
-        item = item.strip()
-        if not item or '=' not in item:
-            continue
-        name, value = item.split('=', 1)
-        name = name.strip()
-        value = value.strip()
-        if name:
-            cookies[name] = value
-    
-    return cookies
+        return []
+    try:
+        cookies = json.loads(cookie_str.strip())
+        if isinstance(cookies, list):
+            return cookies
+    except json.JSONDecodeError:
+        print("❌ Cookie JSON 解析失败")
+    return []
 
 
 class SouthPlusSigner:
     """South Plus 签到类"""
     
-    def __init__(self, cookies_dict):
-        self.cookies = cookies_dict
-        self.browser = None
+    def __init__(self, cookies_list):
+        self.cookies = cookies_list
+        self.driver = None
         self.result = {
             'success': False,
             'daily': False,
@@ -169,94 +172,75 @@ class SouthPlusSigner:
     
     def run(self):
         """执行签到流程"""
-        self.browser = init_browser()
-        if not self.browser:
+        self.driver = init_driver()
+        if not self.driver:
             self.result['message'] = '浏览器初始化失败'
             return self.result
         
         try:
-            # 访问网站
-            print(f"🌐 正在访问网站...")
-            self.browser.get('https://www.south-plus.net')
+            # 访问网站并添加 Cookie
+            print(f"🌐 正在初始化...")
+            self.driver.get('https://www.south-plus.net')
             time.sleep(2)
             
-            # 使用JavaScript设置Cookie
-            print(f"🍪 正在添加 {len(self.cookies)} 个Cookie...")
-            cookie_js = ""
-            for name, value in self.cookies.items():
-                # 对value中的特殊字符进行处理
-                safe_value = value.replace('"', '\\"')
-                cookie_js += f'document.cookie = "{name}={safe_value}; domain=.south-plus.net; path=/"; '
+            # 添加 Cookie
+            print(f"🍪 正在添加 Cookie...")
+            for cookie in self.cookies:
+                try:
+                    # 确保必要的字段
+                    if 'domain' not in cookie:
+                        cookie['domain'] = '.south-plus.net'
+                    self.driver.add_cookie(cookie)
+                except Exception as e:
+                    print(f"   ⚠️ Cookie {cookie.get('name', 'unknown')}: {e}")
             
-            self.browser.run_js(cookie_js)
-            time.sleep(2)
-            
-            # 验证Cookie
-            current_cookie = self.browser.run_js('return document.cookie')
-            print(f"🔍 当前Cookie数量: {len(current_cookie.split(';'))}")
-            
-            # 检查关键cookie是否存在
-            has_winduser = 'eb9e6_winduser' in current_cookie
-            has_cknum = 'eb9e6_cknum' in current_cookie
-            print(f"🔍 winduser cookie: {has_winduser}")
-            print(f"🔍 cknum cookie: {has_cknum}")
+            # 刷新页面应用 Cookie
+            self.driver.refresh()
+            time.sleep(3)
             
             # 访问任务页面
             print(f"🌐 正在访问任务页面...")
-            self.browser.get('https://www.south-plus.net/plugin.php?H_name-tasks.html.html')
+            self.driver.get('https://www.south-plus.net/plugin.php?H_name-tasks.html.html')
             time.sleep(3)
             
             # 检查登录状态
-            page_html = self.browser.html
-            
-            # 判断登录状态的更可靠方法
-            is_logged_in = (
-                'member.php?mod=logging&amp;action=logout' in page_html or
-                'action=logout' in page_html or
-                'eb9e6_winduser' in self.browser.run_js('return document.cookie')
-            )
-            
-            is_not_logged_in = (
-                '立即登录' in page_html and '忘记密码' in page_html and
-                'member.php?mod=logging&amp;action=logout' not in page_html
-            )
-            
-            print(f"🔍 已登录标志: {is_logged_in}")
-            print(f"🔍 未登录标志: {is_not_logged_in}")
-            
-            if is_not_logged_in and not is_logged_in:
-                self.result['message'] = 'Cookie已失效或设置失败，请重新获取'
+            page_source = self.driver.page_source
+            if 'member.php?mod=logging&action=logout' not in page_source:
+                self.result['message'] = 'Cookie 已失效，请重新获取'
                 print(f"❌ {self.result['message']}")
-                # 输出页面部分内容帮助调试
-                if '_cf_chl' in page_html or 'cf-browser-verification' in page_html:
-                    print(f"⚠️ 检测到Cloudflare验证页面，Cookie可能无效")
                 return self.result
             
-            # 解析任务状态
-            daily_task = 'id="p_15"' in page_html
-            weekly_task = 'id="p_14"' in page_html
+            print("✅ 登录状态正常")
             
-            print(f"📋 日常任务: {'可领取' if daily_task else '暂无/已领取'}")
-            print(f"📋 周常任务: {'可领取' if weekly_task else '暂无/已领取'}")
+            # 检查任务状态
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(page_source, 'html.parser')
+            
+            daily_task = soup.find('span', id='p_15')
+            weekly_task = soup.find('span', id='p_14')
+            
+            print(f"📋 日常任务: {'可领取' if daily_task else '暂无'}")
+            print(f"📋 周常任务: {'可领取' if weekly_task else '暂无'}")
             
             # 领取任务
             if daily_task or weekly_task:
                 if weekly_task:
                     try:
-                        self.browser.ele('xpath://*[@id="p_14"]/a/img').click()
+                        self.driver.find_element(By.XPATH, '//*[@id="p_14"]/a/img').click()
                         time.sleep(1)
                         print("✅ 周常任务已领取")
                     except Exception as e:
-                        print(f"⚠️ 周常任务领取失败: {e}")
+                        print(f"⚠️ 周常领取失败: {e}")
                 
                 if daily_task:
                     try:
-                        self.browser.ele('xpath://*[@id="p_15"]/a/img').click()
+                        self.driver.find_element(By.XPATH, '//*[@id="p_15"]/a/img').click()
                         time.sleep(1)
                         print("✅ 日常任务已领取")
                     except Exception as e:
-                        print(f"⚠️ 日常任务领取失败: {e}")
+                        print(f"⚠️ 日常领取失败: {e}")
                 
+                # 完成任务
                 self.complete_tasks()
             else:
                 self.result['message'] = '任务暂未刷新或已领取'
@@ -270,57 +254,51 @@ class SouthPlusSigner:
             print(f"❌ {self.result['message']}")
         
         finally:
-            if self.browser:
-                try:
-                    self.browser.quit()
-                except:
-                    pass
+            if self.driver:
+                self.driver.quit()
         
         return self.result
     
     def complete_tasks(self):
         """完成任务领取"""
         try:
-            ongoing_tab = self.browser.ele('xpath://*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td')
-            ongoing_tab.click()
+            # 切换到进行中的任务
+            self.driver.find_element(By.XPATH, '//*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td').click()
             time.sleep(2)
             
+            # 完成日常
             try:
-                self.browser.ele('xpath://*[@id="both_15"]/a/img').click()
+                self.driver.find_element(By.XPATH, '//*[@id="both_15"]/a/img').click()
                 self.result['daily'] = True
-                self.result['message'] += '日常领取成功; '
+                self.result['message'] += '日常完成; '
                 print("✅ 日常任务完成")
+                time.sleep(1)
             except:
-                print("ℹ️ 日常任务未完成或已领取")
+                print("ℹ️ 日常已完成或无需操作")
             
-            time.sleep(1)
-            
+            # 完成周常
             try:
-                self.browser.ele('xpath://*[@id="both_14"]/a/img').click()
+                self.driver.find_element(By.XPATH, '//*[@id="both_14"]/a/img').click()
                 self.result['weekly'] = True
-                self.result['message'] += '周常领取成功; '
+                self.result['message'] += '周常完成; '
                 print("✅ 周常任务完成")
             except:
-                print("ℹ️ 周常任务未完成或已领取")
+                print("ℹ️ 周常已完成或无需操作")
                 
         except Exception as e:
-            self.result['message'] = f'任务完成流程异常: {str(e)}'
-            print(f"❌ {self.result['message']}")
+            print(f"⚠️ 任务完成流程: {e}")
     
     def check_ongoing_tasks(self):
-        """检查进行中的任务状态"""
+        """检查进行中的任务"""
         try:
-            # 尝试找到"进行中的任务"标签
-            ongoing_tab = self.browser.ele('xpath://*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td', timeout=3)
-            ongoing_tab.click()
+            self.driver.find_element(By.XPATH, '//*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td').click()
             time.sleep(2)
             
-            page_html = self.browser.html
-            if 'both_15' in page_html or 'both_14' in page_html:
-                print("🔍 检测到有进行中的任务，尝试完成...")
+            page_source = self.driver.page_source
+            if 'both_15' in page_source or 'both_14' in page_source:
+                print("🔍 检测到有进行中的任务...")
                 self.complete_tasks()
-        except Exception:
-            # 页面结构可能不同，静默忽略
+        except:
             pass
 
 
@@ -338,48 +316,50 @@ def main():
     cookie_str = os.environ.get('SOUTHPLUS_COOKIE', '')
     
     if not cookie_str:
-        error_msg = """❌ 未找到Cookie配置
+        error_msg = """❌ 未找到 Cookie 配置
 
 🔧 配置方法:
 设置环境变量 SOUTHPLUS_COOKIE
 
-💡 Cookie获取方法:
+💡 Cookie 获取方法:
 1. 登录 https://www.south-plus.net/
 2. 按F12打开开发者工具
-3. 切换到 Network 标签
-4. 刷新页面，点击第一个请求
-5. 在 Request Headers 中找到 Cookie，复制全部内容
-"""
+3. 切换到 Application/Storage → Cookies
+4. 复制为 JSON 格式
+
+示例格式:
+[
+  {"name": "eb9e6_winduser", "value": "xxx", "domain": ".south-plus.net"},
+  {"name": "eb9e6_cknum", "value": "xxx", "domain": ".south-plus.net"}
+]"""
         print(error_msg)
         notify_user("SouthPlus签到失败", error_msg)
         return
     
-    cookies = parse_cookie_string(cookie_str)
+    cookies = parse_cookie_json(cookie_str)
     if not cookies:
-        error_msg = "❌ Cookie解析失败，请检查格式"
+        error_msg = "❌ Cookie 解析失败，请检查 JSON 格式"
         print(error_msg)
         notify_user("SouthPlus签到失败", error_msg)
         return
     
-    print(f"📝 成功解析Cookie，包含 {len(cookies)} 个cookie项")
+    print(f"📝 成功解析 Cookie，包含 {len(cookies)} 项")
     
     signer = SouthPlusSigner(cookies)
     result = signer.run()
     
     if result['success']:
-        status_icon = "✅"
         daily_icon = "📅" if result['daily'] else ""
         weekly_icon = "📆" if result['weekly'] else ""
         summary_msg = f"""📊 SouthPlus签到结果
 
-{status_icon} 签到成功
+✅ 签到成功
 {daily_icon}{weekly_icon} {result['message']}
 ⏰ 完成时间: {datetime.now().strftime('%m-%d %H:%M')}"""
         
         print(f"\n{'='*50}")
         print(summary_msg)
         print(f"{'='*50}")
-        
         notify_user("SouthPlus签到完成", summary_msg)
     else:
         error_msg = f"""❌ SouthPlus签到失败
@@ -390,7 +370,6 @@ def main():
         print(f"\n{'='*50}")
         print(error_msg)
         print(f"{'='*50}")
-        
         notify_user("SouthPlus签到失败", error_msg)
     
     print(f"\n==== SouthPlus签到结束 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
