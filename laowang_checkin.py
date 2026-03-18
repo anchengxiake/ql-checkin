@@ -282,6 +282,43 @@ def find_working_ip():
     
     return None
 
+
+def get_browser_path():
+    """自动查找浏览器可执行文件路径"""
+    env_paths = [
+        os.getenv('LAOWANG_BROWSER_PATH', '').strip(),
+        os.getenv('BROWSER_PATH', '').strip(),
+        os.getenv('CHROME_PATH', '').strip(),
+        os.getenv('EDGE_PATH', '').strip(),
+    ]
+    
+    for path in env_paths:
+        if path and os.path.exists(path):
+            logger.info(f"✅ 使用环境变量指定的浏览器: {path}")
+            return path
+    
+    common_paths = [
+        r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        r'/usr/bin/google-chrome',
+        r'/usr/bin/google-chrome-stable',
+        r'/usr/bin/chromium',
+        r'/usr/bin/chromium-browser',
+        r'/opt/google/chrome/google-chrome',
+        r'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        r'/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            logger.info(f"✅ 自动找到浏览器: {path}")
+            return path
+    
+    logger.warning("⚠️ 未找到浏览器可执行文件，可通过 LAOWANG_BROWSER_PATH 指定路径")
+    return None
+
 # ============ 账号密码登录模式 ============
 class LaowangLoginSign:
     """账号密码登录签到模式"""
@@ -721,6 +758,16 @@ class LaowangBrowserSign:
             import DrissionPage
             
             co = DrissionPage.ChromiumOptions()
+            browser_path = get_browser_path()
+            if browser_path:
+                try:
+                    co.set_browser_path(browser_path)
+                except Exception:
+                    try:
+                        co.browser_path = browser_path
+                    except Exception:
+                        pass
+            
             co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36')
             co.set_pref('credentials_enable_service', False)
             co.set_argument('--hide-crash-restore-bubble')
@@ -740,6 +787,7 @@ class LaowangBrowserSign:
             return False
         except Exception as e:
             logger.error(f"❌ 浏览器初始化失败: {e}")
+            logger.error("💡 可设置环境变量 LAOWANG_BROWSER_PATH 指向 chrome.exe 或 msedge.exe")
             return False
     
     def pass_slide_verification(self):
