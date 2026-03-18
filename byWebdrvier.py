@@ -195,22 +195,45 @@ class SouthPlusSigner:
                     print(f"   ⚠️ Cookie {cookie.get('name', 'unknown')}: {e}")
             
             # 刷新页面应用 Cookie
+            print("🔄 刷新页面应用 Cookie...")
             self.driver.refresh()
             time.sleep(3)
             
-            # 访问任务页面
-            print(f"🌐 正在访问任务页面...")
-            self.driver.get('https://www.south-plus.net/plugin.php?H_name-tasks.html.html')
+            # 检查当前 Cookie
+            current_cookies = self.driver.get_cookies()
+            print(f"🔍 当前浏览器 Cookie 数量: {len(current_cookies)}")
+            cookie_names = [c['name'] for c in current_cookies]
+            if 'eb9e6_winduser' in cookie_names:
+                print("✅ winduser Cookie 已设置")
+            else:
+                print("⚠️ winduser Cookie 未找到")
+            
+            # 先访问首页检查登录状态
+            print("🔍 检查登录状态...")
+            self.driver.get('https://www.south-plus.net')
             time.sleep(3)
             
             # 检查登录状态
             page_source = self.driver.page_source
-            if 'member.php?mod=logging&action=logout' not in page_source:
+            has_logout = 'member.php?mod=logging&action=logout' in page_source
+            has_login = '立即登录' in page_source or '登录' in page_source
+            
+            print(f"   有退出链接: {has_logout}")
+            print(f"   有登录按钮: {has_login}")
+            
+            if not has_logout:
+                print("🔍 页面内容预览 (前500字符):")
+                print(page_source[:500])
                 self.result['message'] = 'Cookie 已失效，请重新获取'
                 print(f"❌ {self.result['message']}")
                 return self.result
             
             print("✅ 登录状态正常")
+            
+            # 访问任务页面
+            print(f"🌐 正在访问任务页面...")
+            self.driver.get('https://www.south-plus.net/plugin.php?H_name-tasks.html.html')
+            time.sleep(3)
             
             # 检查任务状态
             from bs4 import BeautifulSoup

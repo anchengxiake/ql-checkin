@@ -286,10 +286,11 @@ def find_working_ip():
 class LaowangLoginSign:
     """账号密码登录签到模式"""
     
-    def __init__(self, username, password, index=1):
+    def __init__(self, username, password, index=1, browser_fallback_available=False):
         self.username = username
         self.password = password
         self.index = index
+        self.browser_fallback_available = browser_fallback_available
         self.session = self._create_session()
         self.display_name = username
         
@@ -557,7 +558,9 @@ class LaowangLoginSign:
                 
                 # 需要验证
                 if any(x in resp_text for x in ['验证', 'captcha', '滑块', '安全验证']):
-                    return False, f"⚠️ {self.display_name} 需要滑块验证，建议手动签到一次"
+                    if self.browser_fallback_available:
+                        return False, f"⚠️ {self.display_name} 需要滑块验证，准备切换浏览器模式重试"
+                    return False, f"⚠️ {self.display_name} 需要滑块验证，建议安装 DrissionPage 后启用浏览器模式"
                 
                 return False, f"❌ {self.display_name} 签到响应异常"
                 
@@ -859,9 +862,11 @@ class LaowangBrowserSign:
             # 点击登录
             logger.info("🔑 正在提交登录...")
             self.browser.ele('@name=loginsubmit').click()
+            time.sleep(3)
             
-            # 等待跳转
-            self.browser.wait.url_change(BASE_URL, timeout=10)
+            if 'member.php?mod=logging&action=login' in self.browser.url and '退出' not in self.browser.html:
+                return False, f"❌ {self.username}: 登录后仍停留在登录页"
+            
             logger.info("✅ 登录成功")
             
             # 访问签到页面
@@ -890,11 +895,16 @@ class LaowangBrowserSign:
                     
                     # 提交签到
                     self.browser.ele('@id=submit-btn').click()
-                    self.browser.wait.url_change(SIGN_PAGE_URL, timeout=10)
+                    time.sleep(3)
+                    
+                    if any(x in self.browser.html for x in ['今日已签', 'btnvisted', '签到成功', '恭喜您签到成功']):
+                        return True, f"✅ {self.username} 签到成功"
                     
                     return True, f"✅ {self.username} 签到成功"
                 except:
                     # 可能不需要滑块，直接签到成功
+                    if any(x in self.browser.html for x in ['今日已签', 'btnvisted', '签到成功', '恭喜您签到成功']):
+                        return True, f"✅ {self.username} 签到成功"
                     return True, f"✅ {self.username} 签到成功"
                     
             except Exception as e:
@@ -1086,12 +1096,21 @@ LAOWANG_PROXY=http://127.0.0.1:7890
                 signer = LaowangLoginSign(
                     account['username'],
                     account['password'],
-                    idx
+                    idx,
+                    browser_fallback_available=drissionpage_available
                 )
                 success, msg = signer.do_sign()
                 
-                # 如果是因为滑块失败且安装了DrissionPage，提示使用浏览器模式
+                # HTTP模式遇到滑块时，自动切换浏览器模式重试
                 if not success and '滑块' in msg and drissionpage_available:
+                    logger.info("🔄 HTTP模式遇到滑块验证，切换浏览器模式重试...")
+                    signer = LaowangBrowserSign(
+                        account['username'],
+                        account['password'],
+                        idx
+                    )
+                    success, msg = signer.do_sign()
+                elif not success and '滑块' in msg and not drissionpage_available:
                     msg += "\n💡 提示: 安装 DrissionPage 可自动处理滑块"
         else:
             # Cookie 模式
