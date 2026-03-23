@@ -211,8 +211,27 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
     response = requests.get(url, headers=headers, timeout=20)
     response.encoding = response.apparent_encoding or response.encoding or "utf-8"
     html = response.text or ""
+
+    html_lower = html.lower()
+    if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
+        raise Exception("触发 Cloudflare 验证，当前站点无法直接请求")
+
     if "您还没有登录或注册" in html:
         raise Exception("Cookie 无效或已过期：站点返回未登录")
+
+    # 任务页有效性校验：避免误把重定向页/异常页当成功
+    valid_markers = [
+        "社区论坛任务",
+        "按这申请此任务",
+        "领取此奖励",
+        "startjob(",
+        "H_name-tasks",
+    ]
+    if not any(m in html for m in valid_markers):
+        m_title = re.search(r"<title>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+        title = m_title.group(1).strip() if m_title else "未知页面"
+        raise Exception(f"任务页内容异常: {title}")
+
     return html
 
 
@@ -334,6 +353,7 @@ def main():
             if not success_log:
                 raise Exception(f"所有站点均失败，最后错误: {last_error}")
 
+            print(success_log)
             summary.append(f"账号{idx}: \n{success_log}")
         except Exception as e:
             err_msg = f"账号{idx} 失败: {e}"
@@ -341,6 +361,8 @@ def main():
             print(f"❌ {err_msg}")
 
     result = "\n\n".join(summary)
+    print("\n========== 本次执行汇总 ==========")
+    print(result)
     try:
         Push("SouthPlus签到", result)
     except Exception as err:
