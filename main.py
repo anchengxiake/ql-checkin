@@ -200,49 +200,49 @@ def parse_message_from_response(data: str) -> str:
     return plain[:120] if plain else "接口返回为空"
 
 
-def fetch_verify(cookie: str, site_base: str) -> str:
-    """进入任务页提取 verify 参数。"""
-    url = f"{site_base}/plugin.php"
+def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
+    """抓取任务页面（自动按响应头编码解析）。"""
+    url = f"{site_base}/plugin.php{page_suffix}"
     headers = {
         **base_headers,
         "cookie": cookie,
         "referer": f"{site_base}/",
     }
-    candidate_urls = [
-        f"{url}?H_name-tasks.html.html",
-        f"{url}?H_name-tasks-actions-newtasks.html.html",
-    ]
+    response = requests.get(url, headers=headers, timeout=20)
+    response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+    html = response.text or ""
+    if "您还没有登录或注册" in html:
+        raise Exception("Cookie 无效或已过期：站点返回未登录")
+    return html
 
-    last_html = ""
-    for page_url in candidate_urls:
-        response = requests.get(page_url, headers=headers, timeout=20)
-        response.encoding = "utf-8"
-        html = response.text or ""
-        last_html = html
 
-        if "您还没有登录或注册" in html:
-            raise Exception("Cookie 无效或已过期：站点返回未登录")
+def extract_jobs_from_html(html: str):
+    """从任务页提取 startjob(cid, verify) 列表。"""
+    # 例: startjob('15','5af36471')
+    matches = re.findall(
+        r"startjob\(\s*'?(\d+)'?\s*,\s*'?(\w{6,64})'?\s*\)",
+        html,
+        flags=re.IGNORECASE,
+    )
+    jobs = []
+    seen = set()
+    for cid, verify in matches:
+        key = (cid, verify)
+        if key not in seen:
+            seen.add(key)
+            jobs.append(key)
+    return jobs
 
-        patterns = [
-            r"verify=([0-9a-zA-Z]{6,64})",
-            r"['\"]verify['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
-            r"var\s+verify\s*=\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
-            r"verifyhash=([0-9a-zA-Z]{6,64})",
-            r"['\"]verifyhash['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
-            r"formhash=([0-9a-zA-Z]{6,64})",
-        ]
-        for p in patterns:
-            m = re.search(p, html, flags=re.IGNORECASE)
-            if m:
-                return m.group(1)
 
-    # 兜底：抓取所有可能 token，优先使用长度较短且像 verify 的值
-    all_tokens = re.findall(r"(?:verify|verifyhash|formhash)[=:]\s*([0-9a-zA-Z]{6,64})", last_html, flags=re.IGNORECASE)
-    if all_tokens:
-        all_tokens = sorted(set(all_tokens), key=len)
-        return all_tokens[0]
-
-    raise Exception("未能从任务页提取 verify，请确认域名与COOKIE同站")
+def build_job_params(action: str, cid: str, verify: str):
+    return {
+        "H_name": "tasks",
+        "action": "ajax",
+        "actions": action,
+        "cid": cid,
+        "nowtime": str(int(time.time() * 1000)),
+        "verify": verify,
+    }
 
 
 def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
@@ -263,8 +263,6 @@ def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
 def run_for_cookie(cookie: str, site_base: str) -> str:
     """单账号执行签到任务并返回日志"""
     url = f"{site_base}/plugin.php"
-    verify = fetch_verify(cookie, site_base)
-    ad_params, aw_params, cd_params, cw_params = build_task_params(verify)
 
     headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks-actions-newtasks.html.html"}
     headers_finish = {
@@ -277,20 +275,35 @@ def run_for_cookie(cookie: str, site_base: str) -> str:
         "Referer": url + "?H_name-tasks.html.html",
     }
 
-    log = ""
-    if tasks(url, ad_params, headers_apply, "申请-日常: "):
-        tasks(url, cd_params, headers_finish, "完成-日常: ")
-        log += "日常任务完成\n"
-    else:
-        log += "日常任务已完成或未达时间\n"
+    log_lines = [f"站点: {site_base}"]
 
-    if tasks(url, aw_params, headers_apply, "申请-周常: "):
-        tasks(url, cw_params, headers_finish, "完成-周常: ")
-        log += "周常任务完成\n"
+    # 1) 申请可做任务（job）
+    new_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks.html")
+    apply_jobs = extract_jobs_from_html(new_tasks_html)
+    if apply_jobs:
+        log_lines.append(f"检测到可申请任务: {len(apply_jobs)}")
     else:
-        log += "周常任务已完成或未达时间\n"
+        log_lines.append("未检测到可申请任务")
 
-    return f"站点: {site_base}\n{log.rstrip()}"
+    for cid, verify in apply_jobs:
+        params = build_job_params("job", cid, verify)
+        tasks(url, params, headers_apply, f"申请任务(cid={cid}): ")
+        time.sleep(0.15)
+
+    # 2) 领取已完成任务（job2）
+    current_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-newtasks.html.html")
+    reward_jobs = extract_jobs_from_html(current_tasks_html)
+    if reward_jobs:
+        log_lines.append(f"检测到可领取任务: {len(reward_jobs)}")
+    else:
+        log_lines.append("未检测到可领取任务")
+
+    for cid, verify in reward_jobs:
+        params = build_job_params("job2", cid, verify)
+        tasks(url, params, headers_finish, f"领取任务(cid={cid}): ")
+        time.sleep(0.15)
+
+    return "\n".join(log_lines)
 
 
 def main():
