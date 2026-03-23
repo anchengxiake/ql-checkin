@@ -26,7 +26,19 @@ except ImportError:
 max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
 random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
 
-url = "https://south-plus.net/plugin.php"
+DEFAULT_SITE_BASES = [
+    "https://north-plus.net",
+    "https://south-plus.net",
+    "https://east-plus.net",
+    "https://white-plus.net",
+    "https://level-plus.net",
+    "https://soul-plus.net",
+    "https://snow-plus.net",
+    "https://spring-plus.net",
+    "https://summer-plus.net",
+    "https://blue-plus.net",
+    "https://imoutolove.me",
+]
 
 base_headers = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -121,6 +133,26 @@ def get_cookies():
     return cookie_list
 
 
+def get_site_bases():
+    """读取可用站点列表，支持 SOUTHPLUS_BASES / SOUTHPLUS_BASE。"""
+    bases_raw = os.getenv("SOUTHPLUS_BASES", "").strip()
+    single_base = os.getenv("SOUTHPLUS_BASE", "").strip()
+
+    if bases_raw:
+        bases = [b.strip().rstrip("/") for b in re.split(r"\n|&&|,", bases_raw) if b.strip()]
+    elif single_base:
+        bases = [single_base.rstrip("/")]
+    else:
+        bases = DEFAULT_SITE_BASES[:]
+
+    # 去重（保序）
+    dedup = []
+    for b in bases:
+        if b not in dedup:
+            dedup.append(b)
+    return dedup
+
+
 def normalize_cookie(raw_cookie: str) -> str:
     """清洗 Cookie，移除无效片段并规范空格。"""
     pairs = []
@@ -168,35 +200,52 @@ def parse_message_from_response(data: str) -> str:
     return plain[:120] if plain else "接口返回为空"
 
 
-def fetch_verify(cookie: str) -> str:
+def fetch_verify(cookie: str, site_base: str) -> str:
     """进入任务页提取 verify 参数。"""
+    url = f"{site_base}/plugin.php"
     headers = {
         **base_headers,
         "cookie": cookie,
-        "referer": "https://south-plus.net/",
+        "referer": f"{site_base}/",
     }
-    params = {"H_name": "tasks"}
-    response = requests.get(url, params=params, headers=headers, timeout=20)
-    response.encoding = "utf-8"
-    html = response.text or ""
-
-    if "您还没有登录或注册" in html or "登录" in html and "tasks" not in html:
-        raise Exception("Cookie 无效或已过期：站点返回未登录")
-
-    patterns = [
-        r"verify=([0-9a-fA-F]{6,32})",
-        r"['\"]verify['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
-        r"var\s+verify\s*=\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+    candidate_urls = [
+        f"{url}?H_name-tasks.html.html",
+        f"{url}?H_name-tasks-actions-newtasks.html.html",
     ]
-    for p in patterns:
-        m = re.search(p, html)
-        if m:
-            return m.group(1)
 
-    raise Exception("未能从任务页提取 verify，可能触发风控或页面结构变化")
+    last_html = ""
+    for page_url in candidate_urls:
+        response = requests.get(page_url, headers=headers, timeout=20)
+        response.encoding = "utf-8"
+        html = response.text or ""
+        last_html = html
+
+        if "您还没有登录或注册" in html:
+            raise Exception("Cookie 无效或已过期：站点返回未登录")
+
+        patterns = [
+            r"verify=([0-9a-zA-Z]{6,64})",
+            r"['\"]verify['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+            r"var\s+verify\s*=\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+            r"verifyhash=([0-9a-zA-Z]{6,64})",
+            r"['\"]verifyhash['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+            r"formhash=([0-9a-zA-Z]{6,64})",
+        ]
+        for p in patterns:
+            m = re.search(p, html, flags=re.IGNORECASE)
+            if m:
+                return m.group(1)
+
+    # 兜底：抓取所有可能 token，优先使用长度较短且像 verify 的值
+    all_tokens = re.findall(r"(?:verify|verifyhash|formhash)[=:]\s*([0-9a-zA-Z]{6,64})", last_html, flags=re.IGNORECASE)
+    if all_tokens:
+        all_tokens = sorted(set(all_tokens), key=len)
+        return all_tokens[0]
+
+    raise Exception("未能从任务页提取 verify，请确认域名与COOKIE同站")
 
 
-def tasks(params: dict, headers: dict, action_desc: str) -> bool:
+def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
     response = requests.get(url, params=params, headers=headers)
     response.encoding = "utf-8"
     data = response.text
@@ -211,41 +260,44 @@ def tasks(params: dict, headers: dict, action_desc: str) -> bool:
     return "还没超过" not in message
 
 
-def run_for_cookie(cookie: str) -> str:
+def run_for_cookie(cookie: str, site_base: str) -> str:
     """单账号执行签到任务并返回日志"""
-    verify = fetch_verify(cookie)
+    url = f"{site_base}/plugin.php"
+    verify = fetch_verify(cookie, site_base)
     ad_params, aw_params, cd_params, cw_params = build_task_params(verify)
 
     headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks-actions-newtasks.html.html"}
     headers_finish = {
         **base_headers,
         "cookie": cookie,
-        "authority": "south-plus.net",
+        "authority": site_base.replace("https://", "").replace("http://", ""),
         "method": "GET",
         "path": "/plugin.php?H_name-tasks-actions-newtasks.html.html",
-        "scheme": "https",
+        "scheme": "https" if site_base.startswith("https://") else "http",
         "Referer": url + "?H_name-tasks.html.html",
     }
 
     log = ""
-    if tasks(ad_params, headers_apply, "申请-日常: "):
-        tasks(cd_params, headers_finish, "完成-日常: ")
+    if tasks(url, ad_params, headers_apply, "申请-日常: "):
+        tasks(url, cd_params, headers_finish, "完成-日常: ")
         log += "日常任务完成\n"
     else:
         log += "日常任务已完成或未达时间\n"
 
-    if tasks(aw_params, headers_apply, "申请-周常: "):
-        tasks(cw_params, headers_finish, "完成-周常: ")
+    if tasks(url, aw_params, headers_apply, "申请-周常: "):
+        tasks(url, cw_params, headers_finish, "完成-周常: ")
         log += "周常任务完成\n"
     else:
         log += "周常任务已完成或未达时间\n"
 
-    return log.rstrip()
+    return f"站点: {site_base}\n{log.rstrip()}"
 
 
 def main():
     cookies = get_cookies()
+    site_bases = get_site_bases()
     print("✅ 检测到", len(cookies), "个 SouthPlus 账号\n")
+    print("✅ 可尝试站点:", " | ".join(site_bases), "\n")
 
     summary = []
     for idx, ck in enumerate(cookies, start=1):
@@ -254,8 +306,22 @@ def main():
             clean_cookie = normalize_cookie(ck)
             if not clean_cookie:
                 raise Exception("COOKIE 清洗后为空，请检查环境变量格式")
-            log = run_for_cookie(clean_cookie)
-            summary.append(f"账号{idx}: \n{log}")
+
+            last_error = None
+            success_log = None
+            for site_base in site_bases:
+                try:
+                    print(f"➡️ 尝试站点: {site_base}")
+                    success_log = run_for_cookie(clean_cookie, site_base)
+                    break
+                except Exception as site_err:
+                    last_error = site_err
+                    print(f"⚠️ 站点失败: {site_base} -> {site_err}")
+
+            if not success_log:
+                raise Exception(f"所有站点均失败，最后错误: {last_error}")
+
+            summary.append(f"账号{idx}: \n{success_log}")
         except Exception as e:
             err_msg = f"账号{idx} 失败: {e}"
             summary.append(err_msg)
