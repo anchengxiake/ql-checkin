@@ -42,7 +42,8 @@ DEFAULT_SITE_BASES = [
 
 base_headers = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "accept-encoding": "gzip, deflate, br, zstd",
+    # requests 原生不支持 br/zstd，避免服务端返回无法正常解码的内容
+    "accept-encoding": "gzip, deflate",
     "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
     "priority": "u=0, i",
     "sec-ch-ua": '"Microsoft Edge";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
@@ -230,7 +231,8 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
     if not any(m in html for m in valid_markers):
         m_title = re.search(r"<title>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
         title = m_title.group(1).strip() if m_title else "未知页面"
-        raise Exception(f"任务页内容异常: {title}")
+        snippet = re.sub(r"\s+", " ", html).strip()[:120]
+        raise Exception(f"任务页内容异常: {title} | 内容片段: {snippet or '空'}")
 
     return html
 
@@ -349,6 +351,18 @@ def main():
                 except Exception as site_err:
                     last_error = site_err
                     print(f"⚠️ 站点失败: {site_base} -> {site_err}")
+
+                    # HTTPS 握手异常时，自动降级 HTTP 再试一次
+                    err_text = str(site_err)
+                    if site_base.startswith("https://") and ("SSLError" in err_text or "EOF occurred" in err_text):
+                        http_site = "http://" + site_base[len("https://"):]
+                        try:
+                            print(f"↪️ HTTPS异常，尝试HTTP: {http_site}")
+                            success_log = run_for_cookie(clean_cookie, http_site)
+                            break
+                        except Exception as http_err:
+                            last_error = http_err
+                            print(f"⚠️ HTTP也失败: {http_site} -> {http_err}")
 
             if not success_log:
                 raise Exception(f"所有站点均失败，最后错误: {last_error}")
