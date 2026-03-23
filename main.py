@@ -25,6 +25,11 @@ except ImportError:
 # 随机延迟配置
 max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
 random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
+request_timeout = int(os.getenv("SOUTHPLUS_TIMEOUT", "20"))
+
+# 代理：优先 SOUTHPLUS_PROXY，兼容 MY_PROXY
+proxy_url = os.getenv("SOUTHPLUS_PROXY", "").strip() or os.getenv("MY_PROXY", "").strip()
+proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
 DEFAULT_SITE_BASES = [
     "https://north-plus.net",
@@ -136,10 +141,13 @@ def get_cookies():
 
 def get_site_bases():
     """读取可用站点列表，支持 SOUTHPLUS_BASES / SOUTHPLUS_BASE。"""
+    fixed_site = os.getenv("SOUTHPLUS_SITE", "https://south-plus.net").strip()
     bases_raw = os.getenv("SOUTHPLUS_BASES", "").strip()
     single_base = os.getenv("SOUTHPLUS_BASE", "").strip()
 
-    if bases_raw:
+    if fixed_site:
+        bases = [fixed_site.rstrip("/")]
+    elif bases_raw:
         bases = [b.strip().rstrip("/") for b in re.split(r"\n|&&|,", bases_raw) if b.strip()]
     elif single_base:
         bases = [single_base.rstrip("/")]
@@ -209,13 +217,13 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
         "cookie": cookie,
         "referer": f"{site_base}/",
     }
-    response = requests.get(url, headers=headers, timeout=20)
+    response = requests.get(url, headers=headers, timeout=request_timeout, proxies=proxies)
     response.encoding = response.apparent_encoding or response.encoding or "utf-8"
     html = response.text or ""
 
     html_lower = html.lower()
     if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
-        raise Exception("触发 Cloudflare 验证，当前站点无法直接请求")
+        raise Exception("触发 Cloudflare 验证，当前站点无法直接请求（需与浏览器同出口IP的代理）")
 
     if "您还没有登录或注册" in html:
         raise Exception("Cookie 无效或已过期：站点返回未登录")
@@ -267,7 +275,7 @@ def build_job_params(action: str, cid: str, verify: str):
 
 
 def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
-    response = requests.get(url, params=params, headers=headers)
+    response = requests.get(url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
     response.encoding = "utf-8"
     data = response.text
 
@@ -332,6 +340,10 @@ def main():
     site_bases = get_site_bases()
     print("✅ 检测到", len(cookies), "个 SouthPlus 账号\n")
     print("✅ 可尝试站点:", " | ".join(site_bases), "\n")
+    if proxy_url:
+        print(f"✅ 已启用代理: {proxy_url}\n")
+    else:
+        print("⚠️ 未启用代理：Cloudflare 站点大概率会拦截机房IP\n")
 
     summary = []
     for idx, ck in enumerate(cookies, start=1):
