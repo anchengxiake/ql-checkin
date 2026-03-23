@@ -791,15 +791,19 @@ class LaowangBrowserSign:
             co.set_argument('--disable-dev-shm-usage')
             co.set_argument('--no-zygote')
             co.set_argument('--disable-software-rasterizer')
-            co.set_argument('--single-process')
+            # single-process 在部分发行版下反而导致崩溃，移除
             co.set_argument('--no-first-run')
             co.set_argument('--no-default-browser-check')
             co.set_argument('--disable-extensions')
             co.set_argument('--disable-background-networking')
             co.set_argument('--disable-features=TranslateUI,site-per-process,AutomationControlled')
+            co.set_argument('--remote-allow-origins=*')
 
             # 独立用户数据目录，避免权限/冲突
-            user_data_dir = os.getenv('LAOWANG_USER_DATA_DIR', '/tmp/laowang_dp')
+            # 加入随机子目录以规避旧锁文件: /tmp/laowang_dp/run-<timestamp>-<rand>
+            base_user_data_dir = os.getenv('LAOWANG_USER_DATA_DIR', '/tmp/laowang_dp')
+            rand_suffix = str(int(time.time())) + '-' + str(random.randint(1000, 9999))
+            user_data_dir = os.path.join(base_user_data_dir, f'run-{rand_suffix}')
             try:
                 Path(user_data_dir).mkdir(parents=True, exist_ok=True)
                 co.set_argument(f'--user-data-dir={user_data_dir}')
