@@ -44,17 +44,20 @@ base_headers = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
 }
 
-common_params = {
-    "H_name": "tasks",
-    "action": "ajax",
-    "nowtime": "1717167492479",
-    "verify": "5af36471",
-}
+def build_task_params(verify: str):
+    """构建任务参数，verify 需从当前会话页面实时提取。"""
+    common_params = {
+        "H_name": "tasks",
+        "action": "ajax",
+        "nowtime": str(int(time.time() * 1000)),
+        "verify": verify,
+    }
 
-ad_params = {**common_params, "actions": "job", "cid": "15"}
-aw_params = {**common_params, "actions": "job", "cid": "14"}
-cd_params = {**common_params, "actions": "job2", "cid": "15"}
-cw_params = {**common_params, "actions": "job2", "cid": "14"}
+    ad_params = {**common_params, "actions": "job", "cid": "15"}
+    aw_params = {**common_params, "actions": "job", "cid": "14"}
+    cd_params = {**common_params, "actions": "job2", "cid": "15"}
+    cw_params = {**common_params, "actions": "job2", "cid": "14"}
+    return ad_params, aw_params, cd_params, cw_params
 
 
 def format_time_remaining(seconds: int) -> str:
@@ -165,6 +168,34 @@ def parse_message_from_response(data: str) -> str:
     return plain[:120] if plain else "接口返回为空"
 
 
+def fetch_verify(cookie: str) -> str:
+    """进入任务页提取 verify 参数。"""
+    headers = {
+        **base_headers,
+        "cookie": cookie,
+        "referer": "https://south-plus.net/",
+    }
+    params = {"H_name": "tasks"}
+    response = requests.get(url, params=params, headers=headers, timeout=20)
+    response.encoding = "utf-8"
+    html = response.text or ""
+
+    if "您还没有登录或注册" in html or "登录" in html and "tasks" not in html:
+        raise Exception("Cookie 无效或已过期：站点返回未登录")
+
+    patterns = [
+        r"verify=([0-9a-fA-F]{6,32})",
+        r"['\"]verify['\"]\s*[:=]\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+        r"var\s+verify\s*=\s*['\"]([0-9a-zA-Z]{6,64})['\"]",
+    ]
+    for p in patterns:
+        m = re.search(p, html)
+        if m:
+            return m.group(1)
+
+    raise Exception("未能从任务页提取 verify，可能触发风控或页面结构变化")
+
+
 def tasks(params: dict, headers: dict, action_desc: str) -> bool:
     response = requests.get(url, params=params, headers=headers)
     response.encoding = "utf-8"
@@ -173,7 +204,7 @@ def tasks(params: dict, headers: dict, action_desc: str) -> bool:
     message = parse_message_from_response(data)
     print(action_desc + message)
 
-    fail_keywords = ["未登录", "错误", "失败", "非法", "权限", "验证", "Cloudflare"]
+    fail_keywords = ["未登录", "没有登录", "错误", "失败", "非法", "权限", "验证", "Cloudflare"]
     if any(k in message for k in fail_keywords):
         raise Exception(message)
 
@@ -182,6 +213,9 @@ def tasks(params: dict, headers: dict, action_desc: str) -> bool:
 
 def run_for_cookie(cookie: str) -> str:
     """单账号执行签到任务并返回日志"""
+    verify = fetch_verify(cookie)
+    ad_params, aw_params, cd_params, cw_params = build_task_params(verify)
+
     headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks-actions-newtasks.html.html"}
     headers_finish = {
         **base_headers,
