@@ -757,6 +757,7 @@ class LaowangBrowserSign:
         try:
             import DrissionPage
             from pathlib import Path
+            import socket
             
             co = DrissionPage.ChromiumOptions()
             browser_path = get_browser_path()
@@ -793,7 +794,9 @@ class LaowangBrowserSign:
             co.set_argument('--single-process')
             co.set_argument('--no-first-run')
             co.set_argument('--no-default-browser-check')
-            co.set_argument('--remote-debugging-address=127.0.0.1')
+            co.set_argument('--disable-extensions')
+            co.set_argument('--disable-background-networking')
+            co.set_argument('--disable-features=TranslateUI,site-per-process,AutomationControlled')
 
             # 独立用户数据目录，避免权限/冲突
             user_data_dir = os.getenv('LAOWANG_USER_DATA_DIR', '/tmp/laowang_dp')
@@ -806,10 +809,17 @@ class LaowangBrowserSign:
                     pass
             except Exception as e:
                 logger.warning(f"⚠️ 用户数据目录设置失败: {e}")
-            # 避免端口冲突，自动寻找空闲端口
+            # 为远程调试显式选择空闲端口，避免 0 端口失败
             try:
-                co.set_local_port(0)
-            except Exception:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('127.0.0.1', 0))
+                    free_port = s.getsockname()[1]
+                co.set_local_port(free_port)
+                co.set_argument(f'--remote-debugging-port={free_port}')
+                co.set_argument('--remote-debugging-address=127.0.0.1')
+                logger.info(f"🛠️ 远程调试端口: {free_port}")
+            except Exception as e:
+                logger.warning(f"⚠️ 自动分配远程调试端口失败: {e}")
                 co.auto_port()
             
             # 如果使用自定义域名解析，设置代理
