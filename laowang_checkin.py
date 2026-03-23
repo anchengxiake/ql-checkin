@@ -151,8 +151,6 @@ def build_chromium_options():
     except Exception as e:
         logger.warning(f"⚠️ 端口分配失败，使用 auto_port: {e}")
         co.auto_port()
-    else:
-        co.auto_port(enable=False)
     return co
 
 
