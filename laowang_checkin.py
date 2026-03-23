@@ -21,6 +21,8 @@ from pathlib import Path
 import DrissionPage
 
 BASE_URL = "https://laowang.vip/plugin.php?id=k_misign:sign"
+# 可选自定义解析 IP（用于 hosts 绑定）
+CUSTOM_HOST = os.getenv("LAOWANG_CUSTOM_HOST", "104.21.14.105").strip()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -116,6 +118,11 @@ def build_chromium_options():
     co.set_argument("--disable-features=TranslateUI,site-per-process,AutomationControlled")
     co.set_argument("--remote-allow-origins=*")
 
+    # 自定义 hosts 绑定
+    if CUSTOM_HOST:
+        co.set_argument(f"--host-resolver-rules=MAP laowang.vip {CUSTOM_HOST}")
+        logger.info(f"🌐 hosts 绑定: laowang.vip -> {CUSTOM_HOST}")
+
     proxy = os.getenv("LAOWANG_PROXY", "").strip()
     if proxy:
         co.set_argument(f"--proxy-server={proxy}")
@@ -131,7 +138,21 @@ def build_chromium_options():
     except Exception:
         pass
 
-    co.auto_port()
+    # 显式占用本地空闲端口，避免端口被占或为 0
+    try:
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+        co.set_local_port(free_port)
+        co.set_argument(f"--remote-debugging-port={free_port}")
+        co.set_argument("--remote-debugging-address=127.0.0.1")
+        logger.info(f"🛠️ 远程调试端口: {free_port}")
+    except Exception as e:
+        logger.warning(f"⚠️ 端口分配失败，使用 auto_port: {e}")
+        co.auto_port()
+    else:
+        co.auto_port(enable=False)
     return co
 
 
