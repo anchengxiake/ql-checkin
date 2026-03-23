@@ -756,6 +756,7 @@ class LaowangBrowserSign:
         """初始化浏览器"""
         try:
             import DrissionPage
+            from pathlib import Path
             
             co = DrissionPage.ChromiumOptions()
             browser_path = get_browser_path()
@@ -767,14 +768,36 @@ class LaowangBrowserSign:
                         co.browser_path = browser_path
                     except Exception:
                         pass
+            else:
+                # 明确指定青龙常见路径，避免 auto 探测失败
+                fallback_chromium = '/usr/bin/chromium'
+                if os.path.exists(fallback_chromium):
+                    try:
+                        co.set_browser_path(fallback_chromium)
+                    except Exception:
+                        co.browser_path = fallback_chromium
             
             co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36')
             co.set_pref('credentials_enable_service', False)
             co.set_argument('--hide-crash-restore-bubble')
+
+            # 兼容青龙容器：无头、禁沙箱、减小 /dev/shm 依赖
+            co.headless(True)
+            co.set_argument('--headless=new')
             co.set_argument('--no-sandbox')
             co.set_argument('--disable-gpu')
+            co.set_argument('--disable-dev-shm-usage')
+            co.set_argument('--no-zygote')
+            co.set_argument('--disable-software-rasterizer')
+
+            # 独立用户数据目录，避免权限/冲突
+            user_data_dir = os.getenv('LAOWANG_USER_DATA_DIR', '/tmp/laowang_dp')
+            try:
+                Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+                co.set_argument(f'--user-data-dir={user_data_dir}')
+            except Exception as e:
+                logger.warning(f"⚠️ 用户数据目录设置失败: {e}")
             co.auto_port()
-            co.headless(True)
             
             # 如果使用自定义域名解析，设置代理
             if CUSTOM_HOST:
