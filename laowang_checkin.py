@@ -785,19 +785,32 @@ class LaowangBrowserSign:
             co.headless(True)
             co.set_argument('--headless=new')
             co.set_argument('--no-sandbox')
+            co.set_argument('--disable-setuid-sandbox')
             co.set_argument('--disable-gpu')
             co.set_argument('--disable-dev-shm-usage')
             co.set_argument('--no-zygote')
             co.set_argument('--disable-software-rasterizer')
+            co.set_argument('--single-process')
+            co.set_argument('--no-first-run')
+            co.set_argument('--no-default-browser-check')
+            co.set_argument('--remote-debugging-address=127.0.0.1')
 
             # 独立用户数据目录，避免权限/冲突
             user_data_dir = os.getenv('LAOWANG_USER_DATA_DIR', '/tmp/laowang_dp')
             try:
                 Path(user_data_dir).mkdir(parents=True, exist_ok=True)
                 co.set_argument(f'--user-data-dir={user_data_dir}')
+                try:
+                    co.set_user_data_path(user_data_dir)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"⚠️ 用户数据目录设置失败: {e}")
-            co.auto_port()
+            # 避免端口冲突，自动寻找空闲端口
+            try:
+                co.set_local_port(0)
+            except Exception:
+                co.auto_port()
             
             # 如果使用自定义域名解析，设置代理
             if CUSTOM_HOST:
