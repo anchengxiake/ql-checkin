@@ -118,25 +118,64 @@ def get_cookies():
     return cookie_list
 
 
+def normalize_cookie(raw_cookie: str) -> str:
+    """清洗 Cookie，移除无效片段并规范空格。"""
+    pairs = []
+    for item in raw_cookie.split(";"):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            pairs.append(f"{key}={value}")
+    return "; ".join(pairs)
+
+
+def parse_message_from_response(data: str) -> str:
+    """尽量从返回内容中提取任务提示消息。"""
+    data = data or ""
+
+    # 优先按原接口 XML 解析
+    try:
+        root = ET.fromstring(data)
+        cdata = root.text or ""
+        values = [v for v in cdata.split("\t") if v is not None and v != ""]
+        if len(values) >= 2:
+            return values[1].strip()
+        if cdata.strip():
+            return cdata.strip()
+    except ET.ParseError:
+        pass
+
+    # 返回了 HTML 页面（例如 Cloudflare/未登录/权限页）
+    if "<html" in data.lower():
+        if "cf-challenge" in data.lower() or "just a moment" in data.lower() or "cloudflare" in data.lower():
+            return "触发 Cloudflare 验证，Cookie 或 cf_clearance 可能失效"
+
+        m_title = re.search(r"<title>(.*?)</title>", data, flags=re.IGNORECASE | re.DOTALL)
+        if m_title:
+            return f"返回HTML页面: {m_title.group(1).strip()}"
+
+        return "返回HTML页面，未获取到任务接口XML数据"
+
+    # 兜底：去掉多余空白，仅展示前 120 字符
+    plain = re.sub(r"\s+", " ", data).strip()
+    return plain[:120] if plain else "接口返回为空"
+
+
 def tasks(params: dict, headers: dict, action_desc: str) -> bool:
     response = requests.get(url, params=params, headers=headers)
     response.encoding = "utf-8"
     data = response.text
 
-    root = ET.fromstring(data)
-    cdata = root.text or ""
+    message = parse_message_from_response(data)
+    print(action_desc + message)
 
-    values = cdata.split("\t")
-    if "申请" in action_desc:
-        value_len = 2
-    else:
-        value_len = 3
-
-    if len(values) == value_len:
-        message = values[1]
-        print(action_desc + message)
-    else:
-        raise Exception("XML格式不正确，请检查COOKIE设置")
+    fail_keywords = ["未登录", "错误", "失败", "非法", "权限", "验证", "Cloudflare"]
+    if any(k in message for k in fail_keywords):
+        raise Exception(message)
 
     return "还没超过" not in message
 
@@ -178,7 +217,10 @@ def main():
     for idx, ck in enumerate(cookies, start=1):
         print(f"🙍🏻‍♂️ 第{idx}个账号开始")
         try:
-            log = run_for_cookie(ck.replace("\n", "").replace(" ", ""))
+            clean_cookie = normalize_cookie(ck)
+            if not clean_cookie:
+                raise Exception("COOKIE 清洗后为空，请检查环境变量格式")
+            log = run_for_cookie(clean_cookie)
             summary.append(f"账号{idx}: \n{log}")
         except Exception as e:
             err_msg = f"账号{idx} 失败: {e}"
