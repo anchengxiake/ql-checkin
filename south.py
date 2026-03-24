@@ -8,19 +8,18 @@ import re
 import sys
 import time
 import random
-import xml.etree.ElementTree as ET
+import platform
 from datetime import datetime, timedelta
 
-# 尝试导入 pydoll 用于绕过 Cloudflare（优先级最高）
-USE_PYDOLL = False
+# ============ DrissionPage 配置 ============
+USE_DRISSIONPAGE = False
 try:
-    from pydoll.browser import Chrome
-    from pydoll.browser.options import ChromiumOptions
-    USE_PYDOLL = True
-    print("✅ 已加载 pydoll，可自动绕过 Cloudflare 验证")
+    import DrissionPage
+    USE_DRISSIONPAGE = True
+    print("✅ 已加载 DrissionPage，可自动绕过 Cloudflare 验证")
 except ImportError:
-    print("⚠️ 未安装 pydoll-python，尝试使用 cloudscraper")
-    print("   如需自动绕过 Cloudflare，请执行: pip install pydoll-python")
+    print("⚠️ 未安装 DrissionPage，尝试使用 cloudscraper")
+    print("   如需自动绕过 Cloudflare，请执行: pip install DrissionPage")
 
 # 尝试导入 cloudscraper 用于绕过 Cloudflare，如未安装则回退到 requests
 try:
@@ -32,7 +31,7 @@ except ImportError:
     import requests
     scraper = None
     USE_CLOUDSCRAPER = False
-    if not USE_PYDOLL:
+    if not USE_DRISSIONPAGE:
         print("⚠️ 未安装 cloudscraper，使用标准 requests（可能被 Cloudflare 拦截）")
         print("   如需绕过 Cloudflare，请执行: pip install cloudscraper")
 
@@ -52,13 +51,11 @@ def make_request(method, url, **kwargs):
     return req_func(url, **kwargs)
 
 
-# ============== Pydoll CF 绕过功能 ==============
-import asyncio
-import platform
+# ============== DrissionPage CF 绕过功能 ==============
 
-# Pydoll 配置
-PYDOLL_HEADLESS = os.getenv("PYDOLL_HEADLESS", "true").lower() == "true"
-PYDOLL_CHROME_PATH = os.getenv("PYDOLL_CHROME_PATH", "").strip()  # 可选：指定 Chrome 路径
+# DrissionPage 配置
+DRISSIONPAGE_HEADLESS = os.getenv("DRISSIONPAGE_HEADLESS", "true").lower() == "true"
+DRISSIONPAGE_CHROME_PATH = os.getenv("DRISSIONPAGE_CHROME_PATH", "").strip()
 
 
 def find_chrome_path() -> str:
@@ -66,8 +63,8 @@ def find_chrome_path() -> str:
     system = platform.system()
     
     # 如果环境变量已指定，直接使用
-    if PYDOLL_CHROME_PATH:
-        return PYDOLL_CHROME_PATH
+    if DRISSIONPAGE_CHROME_PATH:
+        return DRISSIONPAGE_CHROME_PATH
     
     # 常见浏览器路径
     paths = []
@@ -118,31 +115,41 @@ def find_chrome_path() -> str:
     # 检查路径是否存在
     for path in paths:
         if os.path.exists(path):
-            print(f"[Pydoll] 自动检测到浏览器: {path}")
+            print(f"[DrissionPage] 自动检测到浏览器: {path}")
             return path
     
     # 未找到浏览器
     return None
 
 
-def get_pydoll_options(headless: bool = True, proxy: str = None) -> "ChromiumOptions":
-    """获取 pydoll 浏览器配置"""
-    options = ChromiumOptions()
-    options.headless = headless
-
-    # 服务器/Docker 环境必需参数
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-
-    # 自动检测或使用指定的 Chrome 路径
-    chrome_path = find_chrome_path()
-    if chrome_path:
-        options.binary_location = chrome_path
-    else:
-        # 未找到浏览器，提供友好提示
-        system = platform.system()
-        error_msg = f"""
+def init_browser(headless: bool = True, proxy: str = None):
+    """初始化 DrissionPage 浏览器"""
+    if not USE_DRISSIONPAGE:
+        raise Exception("DrissionPage 未安装，无法使用 CF 绕过功能")
+    
+    try:
+        co = DrissionPage.ChromiumOptions()
+        
+        # 基础配置
+        co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')
+        co.set_pref('credentials_enable_service', False)
+        co.set_argument('--hide-crash-restore-bubble')
+        co.set_argument('--no-sandbox')
+        co.set_argument('--disable-dev-shm-usage')
+        co.set_argument('--disable-gpu')
+        co.auto_port()
+        
+        # 无头模式
+        if headless:
+            co.headless(True)
+        
+        # 指定浏览器路径
+        chrome_path = find_chrome_path()
+        if chrome_path:
+            co.set_browser_path(chrome_path)
+        else:
+            system = platform.system()
+            error_msg = f"""
 未找到 Chrome/Chromium 浏览器！请安装或指定路径。
 
 【青龙面板/Docker 环境安装 Chrome 方法】
@@ -164,210 +171,282 @@ def get_pydoll_options(headless: bool = True, proxy: str = None) -> "ChromiumOpt
 
 方法4: 设置环境变量指定路径
   在青龙面板 -> 环境变量 中添加:
-  PYDOLL_CHROME_PATH=/usr/bin/chromium
+  DRISSIONPAGE_CHROME_PATH=/usr/bin/chromium
 
 当前系统: {system}
 """
-        raise Exception(error_msg)
-
-    # 增加启动超时
-    options.start_timeout = 30
-
-    # 反检测配置 - 模拟真实用户浏览器
-    fake_engagement_time = int(time.time()) - (7 * 24 * 60 * 60)
-
-    options.browser_preferences = {
-        'profile': {
-            'last_engagement_time': fake_engagement_time,
-            'exit_type': 'Normal',
-            'exited_cleanly': True,
-            'default_content_setting_values': {
-                'notifications': 2,
-                'geolocation': 2,
-            },
-        },
-        'session': {
-            'restore_on_startup': 1,
-        },
-    }
-
-    # WebRTC 泄露保护
-    options.webrtc_leak_protection = True
-
-    # 代理配置
-    if proxy:
-        options.add_argument(f'--proxy-server={proxy}')
-
-    return options
+            raise Exception(error_msg)
+        
+        # 代理配置
+        if proxy:
+            co.set_argument(f'--proxy-server={proxy}')
+        
+        browser = DrissionPage.ChromiumPage(co)
+        return browser
+    
+    except Exception as e:
+        raise Exception(f"浏览器初始化失败: {e}")
 
 
-async def pydoll_get_cf_clearance(site_base: str) -> str:
+def drissionpage_get_cf_clearance(site_base: str, cookie_str: str = None) -> dict:
     """
-    使用 pydoll 访问网站首页，绕过 Cloudflare 并获取 cf_clearance
+    使用 DrissionPage 访问网站，绕过 Cloudflare 并获取 cookies
     
     Args:
         site_base: 站点基础 URL（如 https://south-plus.net）
-    
-    Returns:
-        cf_clearance cookie 值
-    """
-    if not USE_PYDOLL:
-        raise Exception("pydoll-python 未安装，无法使用 CF 绕过功能")
-
-    options = get_pydoll_options(headless=PYDOLL_HEADLESS, proxy=proxy_url or None)
-
-    async with Chrome(options=options) as browser:
-        tab = await browser.start()
-
-        # 访问首页（不是任务页面）
-        print(f"[Pydoll] 正在访问首页: {site_base}")
-
-        # 自动检测并处理 Cloudflare
-        try:
-            async with tab.expect_and_bypass_cloudflare_captcha():
-                await tab.go_to(site_base)
-            print("[Pydoll] Cloudflare 验证已通过")
-        except Exception as e:
-            print(f"[Pydoll] Cloudflare 处理: {e}")
-            # 即使超时也继续尝试访问
-            try:
-                await tab.go_to(site_base)
-            except Exception:
-                pass
-
-        # 等待页面加载完成
-        await asyncio.sleep(5)
-
-        # 获取所有 cookies
-        cookies = await tab.get_cookies()
-        cookie_dict = {c['name']: c['value'] for c in cookies}
-        
-        # 提取 cf_clearance
-        cf_clearance = cookie_dict.get('cf_clearance', '')
-        
-        if cf_clearance:
-            print(f"[Pydoll] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
-        else:
-            print("[Pydoll] ⚠️ 未获取到 cf_clearance，可能 Cloudflare 未启用或已通过")
-            # 检查页面是否仍在 Cloudflare 验证中
-            html = await tab.page_source
-            html_lower = html.lower()
-            if "cloudflare" in html_lower or "just a moment" in html_lower:
-                print("[Pydoll] 页面仍在 Cloudflare 验证中，等待更长时间...")
-                await asyncio.sleep(10)
-                cookies = await tab.get_cookies()
-                cookie_dict = {c['name']: c['value'] for c in cookies}
-                cf_clearance = cookie_dict.get('cf_clearance', '')
-                if cf_clearance:
-                    print(f"[Pydoll] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
-
-        return cf_clearance
-
-
-async def pydoll_bypass_cf_and_get_cookies(url: str, existing_cookie: str = None) -> dict:
-    """
-    使用 pydoll 绕过 Cloudflare 并获取 cookies
-    
-    注意：此函数主要用于获取 cf_clearance，页面 HTML 可能不包含用户信息
-    因为 pydoll 无法直接设置用户的登录 cookie
-    
-    Args:
-        url: 目标 URL
-        existing_cookie: 现有的 cookie 字符串（用于合并）
+        cookie_str: 用户 cookie 字符串（可选，用于设置登录状态）
     
     Returns:
         包含 cookies 和页面 HTML 的字典
     """
-    if not USE_PYDOLL:
-        raise Exception("pydoll-python 未安装，无法使用 CF 绕过功能")
-
-    # 从 URL 提取站点基础地址
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    site_base = f"{parsed.scheme}://{parsed.netloc}"
-
-    options = get_pydoll_options(headless=PYDOLL_HEADLESS, proxy=proxy_url or None)
-
-    async with Chrome(options=options) as browser:
-        tab = await browser.start()
-
-        print(f"[Pydoll] 正在访问: {url}")
-
-        # 自动检测并处理 Cloudflare
-        try:
-            async with tab.expect_and_bypass_cloudflare_captcha():
-                await tab.go_to(url)
-            print("[Pydoll] Cloudflare 验证已通过")
-        except Exception as e:
-            print(f"[Pydoll] Cloudflare 处理: {e}")
-            # 即使超时也继续尝试访问
-            try:
-                await tab.go_to(url)
-            except Exception:
-                pass
-
-        # 等待页面加载完成
-        await asyncio.sleep(5)
-
-        # 获取所有 cookies
-        cookies = await tab.get_cookies()
-        cookie_dict = {c['name']: c['value'] for c in cookies}
-        cookie_str = "; ".join([f"{name}={value}" for name, value in cookie_dict.items()])
-
-        # 获取页面 HTML
-        html = await tab.page_source
-
-        # 检查是否仍然在 Cloudflare 验证页面
-        html_lower = html.lower()
-        if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
-            print("[Pydoll] ⚠️ 页面仍显示 Cloudflare 验证，可能需要更长时间等待")
-            # 再等待一段时间
-            await asyncio.sleep(10)
-            html = await tab.page_source
-            cookies = await tab.get_cookies()
-            cookie_dict = {c['name']: c['value'] for c in cookies}
-            cookie_str = "; ".join([f"{name}={value}" for name, value in cookie_dict.items()])
-
-        # 如果有用户 cookie，合并到返回的 cookie 中
-        if existing_cookie:
-            for item in existing_cookie.split(";"):
+    browser = None
+    try:
+        browser = init_browser(headless=DRISSIONPAGE_HEADLESS, proxy=proxy_url or None)
+        
+        # 先访问首页设置 cookies
+        print(f"[DrissionPage] 正在访问首页: {site_base}")
+        browser.get(site_base)
+        time.sleep(2)
+        
+        # 如果提供了用户 cookie，设置到浏览器
+        if cookie_str:
+            print("[DrissionPage] 正在设置用户 Cookie...")
+            # 解析并设置 cookies
+            for item in cookie_str.split(';'):
                 item = item.strip()
-                if "=" in item:
-                    name, value = item.split("=", 1)
+                if '=' in item:
+                    name, value = item.split('=', 1)
                     name = name.strip()
                     value = value.strip()
-                    if name and value and name not in cookie_dict:
-                        cookie_str += f"; {name}={value}"
-
+                    if name and value:
+                        try:
+                            browser.set.cookies.set(name, value, domain=site_base.replace('https://', '').replace('http://', ''))
+                        except Exception as e:
+                            print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
+            
+            # 刷新页面使 cookie 生效
+            browser.refresh()
+            time.sleep(2)
+        
+        # 检查是否在 Cloudflare 验证页面
+        max_wait = 30
+        waited = 0
+        while waited < max_wait:
+            html = browser.html
+            html_lower = html.lower()
+            
+            # 检查是否仍在 Cloudflare 验证中
+            if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
+                print(f"[DrissionPage] 等待 Cloudflare 验证... ({waited}s)")
+                time.sleep(3)
+                waited += 3
+            else:
+                print("[DrissionPage] ✅ Cloudflare 验证已通过")
+                break
+        
+        # 获取所有 cookies
+        cookies = browser.cookies()
+        cookie_dict = {c['name']: c['value'] for c in cookies}
+        cookie_str_result = "; ".join([f"{name}={value}" for name, value in cookie_dict.items()])
+        
+        # 获取页面 HTML
+        html = browser.html
+        
+        # 提取 cf_clearance
+        cf_clearance = cookie_dict.get('cf_clearance', '')
+        if cf_clearance:
+            print(f"[DrissionPage] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
+        else:
+            print("[DrissionPage] ⚠️ 未获取到 cf_clearance，可能 Cloudflare 未启用或已通过")
+        
         return {
-            'cookies': cookie_str,
+            'cookies': cookie_str_result,
             'cookie_dict': cookie_dict,
             'html': html,
-            'url': await tab.current_url,
+            'cf_clearance': cf_clearance,
+            'url': browser.url,
         }
-
-
-def run_pydoll_bypass(url: str, existing_cookie: str = None) -> dict:
-    """同步包装 pydoll CF 绕过函数"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
     
-    if loop.is_running():
-        # 如果在异步环境中，创建新的线程运行
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                asyncio.run,
-                pydoll_bypass_cf_and_get_cookies(url, existing_cookie)
-            )
-            return future.result()
-    else:
-        return loop.run_until_complete(
-            pydoll_bypass_cf_and_get_cookies(url, existing_cookie)
-        )
+    finally:
+        if browser:
+            try:
+                browser.quit()
+            except:
+                pass
+
+
+def drissionpage_do_tasks(site_base: str, cookie_str: str) -> dict:
+    """
+    使用 DrissionPage 完成完整的任务流程
+    
+    任务流程：
+    1. 新任务选择 -> 申请任务 (job)
+    2. 进行中任务 -> 完成任务 (job)  
+    3. 已完成任务 -> 领取奖励 (job2)
+    
+    Args:
+        site_base: 站点基础 URL
+        cookie_str: 用户 cookie 字符串
+    
+    Returns:
+        包含执行结果的字典
+    """
+    browser = None
+    try:
+        browser = init_browser(headless=DRISSIONPAGE_HEADLESS, proxy=proxy_url or None)
+        
+        # 访问首页并设置 cookies
+        print(f"[DrissionPage] 正在访问首页: {site_base}")
+        browser.get(site_base)
+        time.sleep(2)
+        
+        # 设置用户 cookie
+        print("[DrissionPage] 正在设置用户 Cookie...")
+        domain = site_base.replace('https://', '').replace('http://', '')
+        for item in cookie_str.split(';'):
+            item = item.strip()
+            if '=' in item:
+                name, value = item.split('=', 1)
+                name = name.strip()
+                value = value.strip()
+                if name and value:
+                    try:
+                        browser.set.cookies.set(name, value, domain=domain)
+                    except Exception as e:
+                        print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
+        
+        # 刷新页面使 cookie 生效
+        browser.refresh()
+        time.sleep(2)
+        
+        # 等待 Cloudflare 验证
+        max_wait = 30
+        waited = 0
+        while waited < max_wait:
+            html = browser.html
+            html_lower = html.lower()
+            if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
+                print(f"[DrissionPage] 等待 Cloudflare 验证... ({waited}s)")
+                time.sleep(3)
+                waited += 3
+            else:
+                print("[DrissionPage] ✅ Cloudflare 验证已通过")
+                break
+        
+        log_lines = [f"站点: {site_base}"]
+        
+        # ===== 步骤1: 新任务选择 -> 申请任务 =====
+        log_lines.append("📋 步骤1: 新任务选择 - 申请任务")
+        task_url = f"{site_base}/plugin.php?H_name-tasks.html"
+        print(f"[DrissionPage] 访问任务页面: {task_url}")
+        browser.get(task_url)
+        time.sleep(2)
+        
+        # 检查登录状态
+        if "您还没有登录" in browser.html or "您还没有登录或注册" in browser.html:
+            raise Exception("Cookie 无效或已过期：站点返回未登录")
+        
+        # 查找并点击申请任务按钮
+        apply_count = 0
+        try:
+            # 查找所有 startjob 调用
+            html = browser.html
+            jobs = re.findall(r"startjob\(\s*'?(\d+)'?\s*,\s*'?(\w{6,64})'?\s*\)", html, flags=re.IGNORECASE)
+            
+            if jobs:
+                log_lines.append(f"   检测到可申请任务: {len(jobs)}")
+                for cid, verify in jobs:
+                    try:
+                        # 执行 startjob
+                        js_code = f"startjob('{cid}', '{verify}')"
+                        browser.run_js(js_code)
+                        time.sleep(0.5)
+                        apply_count += 1
+                        print(f"[DrissionPage] 申请任务 cid={cid}")
+                    except Exception as e:
+                        print(f"[DrissionPage] 申请任务 cid={cid} 失败: {e}")
+            else:
+                log_lines.append("   未检测到可申请任务")
+        except Exception as e:
+            log_lines.append(f"   申请任务异常: {e}")
+        
+        # ===== 步骤2: 进行中任务 -> 完成任务 =====
+        log_lines.append("📋 步骤2: 进行中任务 - 完成任务")
+        current_url = f"{site_base}/plugin.php?H_name-tasks-actions-newtasks.html.html"
+        print(f"[DrissionPage] 访问进行中任务: {current_url}")
+        browser.get(current_url)
+        time.sleep(2)
+        
+        complete_count = 0
+        try:
+            html = browser.html
+            jobs = re.findall(r"startjob\(\s*'?(\d+)'?\s*,\s*'?(\w{6,64})'?\s*\)", html, flags=re.IGNORECASE)
+            
+            if jobs:
+                log_lines.append(f"   检测到进行中任务: {len(jobs)}")
+                for cid, verify in jobs:
+                    try:
+                        js_code = f"startjob('{cid}', '{verify}')"
+                        browser.run_js(js_code)
+                        time.sleep(0.5)
+                        complete_count += 1
+                        print(f"[DrissionPage] 完成任务 cid={cid}")
+                    except Exception as e:
+                        print(f"[DrissionPage] 完成任务 cid={cid} 失败: {e}")
+            else:
+                log_lines.append("   未检测到进行中任务")
+        except Exception as e:
+            log_lines.append(f"   完成任务异常: {e}")
+        
+        # ===== 步骤3: 已完成任务 -> 领取奖励 =====
+        log_lines.append("📋 步骤3: 已完成任务 - 领取奖励")
+        finished_url = f"{site_base}/plugin.php?H_name-tasks-actions-endtasks.html.html"
+        print(f"[DrissionPage] 访问已完成任务: {finished_url}")
+        browser.get(finished_url)
+        time.sleep(2)
+        
+        reward_count = 0
+        try:
+            html = browser.html
+            jobs = re.findall(r"startjob\(\s*'?(\d+)'?\s*,\s*'?(\w{6,64})'?\s*\)", html, flags=re.IGNORECASE)
+            
+            if jobs:
+                log_lines.append(f"   检测到可领取奖励: {len(jobs)}")
+                for cid, verify in jobs:
+                    try:
+                        js_code = f"startjob('{cid}', '{verify}')"
+                        browser.run_js(js_code)
+                        time.sleep(0.5)
+                        reward_count += 1
+                        print(f"[DrissionPage] 领取奖励 cid={cid}")
+                    except Exception as e:
+                        print(f"[DrissionPage] 领取奖励 cid={cid} 失败: {e}")
+            else:
+                log_lines.append("   未检测到可领取奖励")
+        except Exception as e:
+            log_lines.append(f"   领取奖励异常: {e}")
+        
+        return {
+            'success': True,
+            'log': "\n".join(log_lines),
+            'apply_count': apply_count,
+            'complete_count': complete_count,
+            'reward_count': reward_count,
+        }
+    
+    except Exception as e:
+        return {
+            'success': False,
+            'log': f"执行失败: {e}",
+            'error': str(e),
+        }
+    
+    finally:
+        if browser:
+            try:
+                browser.quit()
+            except:
+                pass
 
 
 def add_cf_clearance_to_cookie(cookie: str) -> str:
@@ -435,21 +514,6 @@ base_headers = {
     "upgrade-insecure-requests": "1",
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
 }
-
-def build_task_params(verify: str):
-    """构建任务参数，verify 需从当前会话页面实时提取。"""
-    common_params = {
-        "H_name": "tasks",
-        "action": "ajax",
-        "nowtime": str(int(time.time() * 1000)),
-        "verify": verify,
-    }
-
-    ad_params = {**common_params, "actions": "job", "cid": "15"}
-    aw_params = {**common_params, "actions": "job", "cid": "14"}
-    cd_params = {**common_params, "actions": "job2", "cid": "15"}
-    cw_params = {**common_params, "actions": "job2", "cid": "14"}
-    return ad_params, aw_params, cd_params, cw_params
 
 
 def format_time_remaining(seconds: int) -> str:
@@ -528,102 +592,148 @@ def get_site_bases():
     else:
         bases = DEFAULT_SITE_BASES[:]
 
-    # 去重（保序）
-    dedup = []
-    for b in bases:
-        if b not in dedup:
-            dedup.append(b)
-    return dedup
+    return bases
 
 
 def normalize_cookie(raw_cookie: str) -> str:
-    """清洗 Cookie，移除无效片段并规范空格。"""
-    pairs = []
-    for item in raw_cookie.split(";"):
-        item = item.strip()
-        if not item or "=" not in item:
-            continue
-        key, value = item.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key and value:
-            pairs.append(f"{key}={value}")
-    return "; ".join(pairs)
+    """规范化 cookie 字符串"""
+    # 去除多余空白
+    cookie = " ".join(raw_cookie.split())
+    # 确保键值对格式正确
+    parts = []
+    for part in cookie.split(";"):
+        part = part.strip()
+        if part and "=" in part:
+            parts.append(part)
+    return "; ".join(parts)
 
 
 def parse_message_from_response(data: str) -> str:
     """尽量从返回内容中提取任务提示消息。"""
-    data = data or ""
-
-    # 优先按原接口 XML 解析
+    if not data:
+        return ""
     try:
-        root = ET.fromstring(data)
-        cdata = root.text or ""
-        values = [v for v in cdata.split("\t") if v is not None and v != ""]
-        if len(values) >= 2:
-            return values[1].strip()
-        if cdata.strip():
-            return cdata.strip()
-    except ET.ParseError:
+        # 尝试解析 XML 格式
+        if data.strip().startswith("<"):
+            try:
+                root = ET.fromstring(data.strip())
+                # 尝试 CDATA
+                if root.text:
+                    return root.text.strip()
+                for child in root.iter():
+                    if child.text and len(child.text.strip()) > 2:
+                        return child.text.strip()
+            except ET.ParseError:
+                pass
+        # 尝试 JSON
+        if data.strip().startswith("{"):
+            try:
+                import json
+                jd = json.loads(data)
+                if isinstance(jd, dict):
+                    for key in ["message", "msg", "info", "data"]:
+                        if key in jd and jd[key]:
+                            return str(jd[key])
+            except json.JSONDecodeError:
+                pass
+        # 纯文本
+        text = re.sub(r"<[^>]+>", "", data).strip()
+        if text:
+            return text[:200]
+    except Exception:
         pass
-
-    # 返回了 HTML 页面（例如 Cloudflare/未登录/权限页）
-    if "<html" in data.lower():
-        if "cf-challenge" in data.lower() or "just a moment" in data.lower() or "cloudflare" in data.lower():
-            return "触发 Cloudflare 验证，Cookie 或 cf_clearance 可能失效"
-
-        m_title = re.search(r"<title>(.*?)</title>", data, flags=re.IGNORECASE | re.DOTALL)
-        if m_title:
-            return f"返回HTML页面: {m_title.group(1).strip()}"
-
-        return "返回HTML页面，未获取到任务接口XML数据"
-
-    # 兜底：去掉多余空白，仅展示前 120 字符
-    plain = re.sub(r"\s+", " ", data).strip()
-    return plain[:120] if plain else "接口返回为空"
+    return ""
 
 
-# 全局变量：存储 pydoll 获取的 cf_clearance
-PYDOLL_CF_CLEARANCE = ""
+def run_for_cookie_drissionpage(cookie: str, site_base: str) -> str:
+    """使用 DrissionPage 执行签到任务"""
+    result = drissionpage_do_tasks(site_base, cookie)
+    return result.get('log', '执行完成')
 
 
-def run_pydoll_get_cf_clearance(site_base: str) -> str:
-    """同步包装：使用 pydoll 获取 cf_clearance"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    if loop.is_running():
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                asyncio.run,
-                pydoll_get_cf_clearance(site_base)
-            )
-            return future.result()
+def run_for_cookie_requests(cookie: str, site_base: str) -> str:
+    """使用传统 requests 方式执行签到任务（备用）"""
+    url = f"{site_base}/plugin.php"
+
+    headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks.html"}
+    headers_finish = {
+        **base_headers,
+        "cookie": cookie,
+        "authority": site_base.replace("https://", "").replace("http://", ""),
+        "method": "GET",
+        "path": "/plugin.php?H_name-tasks-actions-newtasks.html.html",
+        "scheme": "https" if site_base.startswith("https://") else "http",
+        "Referer": url + "?H_name-tasks-actions-newtasks.html.html",
+    }
+    headers_reward = {
+        **base_headers,
+        "cookie": cookie,
+        "authority": site_base.replace("https://", "").replace("http://", ""),
+        "method": "GET",
+        "path": "/plugin.php?H_name-tasks-actions-endtasks.html.html",
+        "scheme": "https" if site_base.startswith("https://") else "http",
+        "Referer": url + "?H_name-tasks-actions-endtasks.html.html",
+    }
+
+    log_lines = [f"站点: {site_base}"]
+
+    # 1) 新任务选择 -> 申请任务（job）
+    log_lines.append("📋 步骤1: 新任务选择 - 申请任务")
+    new_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks.html")
+    apply_jobs = extract_jobs_from_html(new_tasks_html)
+    if apply_jobs:
+        log_lines.append(f"   检测到可申请任务: {len(apply_jobs)}")
     else:
-        return loop.run_until_complete(
-            pydoll_get_cf_clearance(site_base)
-        )
+        log_lines.append("   未检测到可申请任务")
+
+    for cid, verify in apply_jobs:
+        params = build_job_params("job", cid, verify)
+        do_task_request(url, params, headers_apply, f"   申请任务(cid={cid}): ")
+        time.sleep(0.15)
+
+    # 2) 进行中任务 -> 完成任务（job）
+    log_lines.append("📋 步骤2: 进行中任务 - 完成任务")
+    current_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-newtasks.html.html")
+    complete_jobs = extract_jobs_from_html(current_tasks_html)
+    if complete_jobs:
+        log_lines.append(f"   检测到进行中任务: {len(complete_jobs)}")
+    else:
+        log_lines.append("   未检测到进行中任务")
+
+    for cid, verify in complete_jobs:
+        params = build_job_params("job", cid, verify)
+        do_task_request(url, params, headers_finish, f"   完成任务(cid={cid}): ")
+        time.sleep(0.15)
+
+    # 3) 已完成任务 -> 领取奖励（job2）
+    log_lines.append("📋 步骤3: 已完成任务 - 领取奖励")
+    finished_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-endtasks.html.html")
+    reward_jobs = extract_jobs_from_html(finished_tasks_html)
+    if reward_jobs:
+        log_lines.append(f"   检测到可领取奖励: {len(reward_jobs)}")
+    else:
+        log_lines.append("   未检测到可领取奖励")
+
+    for cid, verify in reward_jobs:
+        params = build_job_params("job2", cid, verify)
+        do_task_request(url, params, headers_reward, f"   领取奖励(cid={cid}): ")
+        time.sleep(0.15)
+
+    return "\n".join(log_lines)
 
 
-def fetch_task_page(cookie: str, site_base: str, page_suffix: str, retry_with_pydoll: bool = False) -> str:
+def fetch_task_page(cookie: str, site_base: str, page_suffix: str, retry_with_drissionpage: bool = False) -> str:
     """抓取任务页面（自动按响应头编码解析）。
     
     Args:
         cookie: 用户 cookie
         site_base: 站点基础 URL
         page_suffix: 页面后缀
-        retry_with_pydoll: 是否已尝试用 pydoll 获取 cf_clearance
+        retry_with_drissionpage: 是否已尝试用 DrissionPage
     """
-    global PYDOLL_CF_CLEARANCE, CF_CLEARANCE
-    url = f"{site_base}/plugin.php{page_suffix}"
+    global CF_CLEARANCE
     
-    # 如果已有 pydoll 获取的 cf_clearance，使用它
-    if PYDOLL_CF_CLEARANCE:
-        CF_CLEARANCE = PYDOLL_CF_CLEARANCE
+    url = f"{site_base}/plugin.php{page_suffix}"
     
     # 常规请求方式
     cookie_with_cf = add_cf_clearance_to_cookie(cookie)
@@ -638,39 +748,39 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str, retry_with_py
 
     html_lower = html.lower()
     if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
-        # 如果还没使用 pydoll 获取 cf_clearance，尝试用 pydoll
-        if not retry_with_pydoll and USE_PYDOLL:
-            print("⚠️ 触发 Cloudflare 验证，尝试使用 pydoll 获取 cf_clearance...")
+        # 如果还没使用 DrissionPage，尝试用 DrissionPage
+        if not retry_with_drissionpage and USE_DRISSIONPAGE:
+            print("⚠️ 触发 Cloudflare 验证，尝试使用 DrissionPage...")
             try:
-                cf_clearance = run_pydoll_get_cf_clearance(site_base)
+                result = drissionpage_get_cf_clearance(site_base, cookie)
+                cf_clearance = result.get('cf_clearance', '')
                 if cf_clearance:
-                    PYDOLL_CF_CLEARANCE = cf_clearance
                     CF_CLEARANCE = cf_clearance
-                    print(f"[Pydoll] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
+                    print(f"[DrissionPage] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
                     # 使用新获取的 cf_clearance 重新请求
-                    return fetch_task_page(cookie, site_base, page_suffix, retry_with_pydoll=True)
+                    return fetch_task_page(cookie, site_base, page_suffix, retry_with_drissionpage=True)
                 else:
-                    print("[Pydoll] ⚠️ 未获取到 cf_clearance")
+                    print("[DrissionPage] ⚠️ 未获取到 cf_clearance")
             except Exception as e:
-                print(f"[Pydoll] 获取 cf_clearance 失败: {e}")
+                print(f"[DrissionPage] 获取 cf_clearance 失败: {e}")
         
         error_msg = """触发 Cloudflare 验证，无法直接请求。
 解决方案：
-1. 安装 pydoll-python（推荐）：
-   pip install pydoll-python
-   
+1. 安装 DrissionPage（推荐）：
+   pip install DrissionPage
+    
 2. 设置环境变量 CF_CLEARANCE：
    - 使用浏览器访问站点，通过 F12 -> Network 找到包含 cf_clearance 的请求
    - 复制 cf_clearance 的值
    - 设置环境变量: export CF_CLEARANCE="你的值"
-   
+    
 3. 使用与浏览器同出口 IP 的代理：
    - 设置环境变量: export SOUTHPLUS_PROXY="http://代理地址:端口"
-   
+    
 4. 在本地网络运行脚本（非服务器机房IP）"""
         raise Exception(error_msg)
 
-    if "您还没有登录或注册" in html:
+    if "您还没有登录" in html or "您还没有登录或注册" in html:
         raise Exception("Cookie 无效或已过期：站点返回未登录")
 
     # 任务页有效性校验：避免误把重定向页/异常页当成功
@@ -709,109 +819,43 @@ def extract_jobs_from_html(html: str):
 
 
 def build_job_params(action: str, cid: str, verify: str):
+    """构建任务请求参数"""
     return {
         "H_name": "tasks",
         "action": "ajax",
-        "actions": action,
-        "cid": cid,
         "nowtime": str(int(time.time() * 1000)),
         "verify": verify,
+        "actions": action,
+        "cid": cid,
     }
 
 
-def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
-    # 添加 cf_clearance 到 cookie
-    if "cookie" in headers:
-        headers["cookie"] = add_cf_clearance_to_cookie(headers["cookie"])
-    response = make_request("GET", url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
-    response.encoding = "utf-8"
-    data = response.text
-
-    message = parse_message_from_response(data)
-    print(action_desc + message)
-
-    fail_keywords = ["未登录", "没有登录", "错误", "失败", "非法", "权限", "验证", "Cloudflare"]
-    if any(k in message for k in fail_keywords):
-        raise Exception(message)
-
-    return "还没超过" not in message
+def do_task_request(url: str, params: dict, headers: dict, action_desc: str) -> bool:
+    """执行任务请求"""
+    try:
+        response = make_request("GET", url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
+        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+        data = response.text or ""
+        msg = parse_message_from_response(data)
+        print(f"{action_desc}{msg or '完成'}")
+        return True
+    except Exception as e:
+        print(f"{action_desc}失败: {e}")
+        return False
 
 
 def run_for_cookie(cookie: str, site_base: str) -> str:
     """单账号执行签到任务并返回日志
     
-    任务流程：
-    1. 新任务选择 -> 申请任务 (job)
-    2. 进行中任务 -> 完成任务 (job)
-    3. 已完成任务 -> 领取奖励 (job2)
+    优先使用 DrissionPage，失败则回退到 requests
     """
-    url = f"{site_base}/plugin.php"
-
-    headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks.html"}
-    headers_finish = {
-        **base_headers,
-        "cookie": cookie,
-        "authority": site_base.replace("https://", "").replace("http://", ""),
-        "method": "GET",
-        "path": "/plugin.php?H_name-tasks-actions-newtasks.html.html",
-        "scheme": "https" if site_base.startswith("https://") else "http",
-        "Referer": url + "?H_name-tasks-actions-newtasks.html.html",
-    }
-    headers_reward = {
-        **base_headers,
-        "cookie": cookie,
-        "authority": site_base.replace("https://", "").replace("http://", ""),
-        "method": "GET",
-        "path": "/plugin.php?H_name-tasks-actions-endtasks.html.html",
-        "scheme": "https" if site_base.startswith("https://") else "http",
-        "Referer": url + "?H_name-tasks-actions-endtasks.html.html",
-    }
-
-    log_lines = [f"站点: {site_base}"]
-
-    # 1) 新任务选择 -> 申请任务（job）
-    log_lines.append("📋 步骤1: 新任务选择 - 申请任务")
-    new_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks.html")
-    apply_jobs = extract_jobs_from_html(new_tasks_html)
-    if apply_jobs:
-        log_lines.append(f"   检测到可申请任务: {len(apply_jobs)}")
+    # 优先使用 DrissionPage
+    if USE_DRISSIONPAGE:
+        print(f"[DrissionPage] 使用浏览器模式执行任务...")
+        return run_for_cookie_drissionpage(cookie, site_base)
     else:
-        log_lines.append("   未检测到可申请任务")
-
-    for cid, verify in apply_jobs:
-        params = build_job_params("job", cid, verify)
-        tasks(url, params, headers_apply, f"   申请任务(cid={cid}): ")
-        time.sleep(0.15)
-
-    # 2) 进行中任务 -> 完成任务（job）
-    log_lines.append("📋 步骤2: 进行中任务 - 完成任务")
-    current_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-newtasks.html.html")
-    complete_jobs = extract_jobs_from_html(current_tasks_html)
-    if complete_jobs:
-        log_lines.append(f"   检测到进行中任务: {len(complete_jobs)}")
-    else:
-        log_lines.append("   未检测到进行中任务")
-
-    for cid, verify in complete_jobs:
-        params = build_job_params("job", cid, verify)
-        tasks(url, params, headers_finish, f"   完成任务(cid={cid}): ")
-        time.sleep(0.15)
-
-    # 3) 已完成任务 -> 领取奖励（job2）
-    log_lines.append("📋 步骤3: 已完成任务 - 领取奖励")
-    finished_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-endtasks.html.html")
-    reward_jobs = extract_jobs_from_html(finished_tasks_html)
-    if reward_jobs:
-        log_lines.append(f"   检测到可领取奖励: {len(reward_jobs)}")
-    else:
-        log_lines.append("   未检测到可领取奖励")
-
-    for cid, verify in reward_jobs:
-        params = build_job_params("job2", cid, verify)
-        tasks(url, params, headers_reward, f"   领取奖励(cid={cid}): ")
-        time.sleep(0.15)
-
-    return "\n".join(log_lines)
+        print(f"[Requests] 使用传统请求模式执行任务...")
+        return run_for_cookie_requests(cookie, site_base)
 
 
 def main():
@@ -825,16 +869,16 @@ def main():
         print("⚠️ 未启用代理：Cloudflare 站点大概率会拦截机房IP\n")
     
     # CF 绕过模式提示
-    if USE_PYDOLL:
-        print("🛡️ 已启用 Pydoll Cloudflare 自动绕过模式（推荐）\n")
-        print(f"   无头模式: {PYDOLL_HEADLESS}")
-        if PYDOLL_CHROME_PATH:
-            print(f"   Chrome 路径: {PYDOLL_CHROME_PATH}")
+    if USE_DRISSIONPAGE:
+        print("🛡️ 已启用 DrissionPage Cloudflare 自动绕过模式（推荐）\n")
+        print(f"   无头模式: {DRISSIONPAGE_HEADLESS}")
+        if DRISSIONPAGE_CHROME_PATH:
+            print(f"   Chrome 路径: {DRISSIONPAGE_CHROME_PATH}")
         print()
     elif USE_CLOUDSCRAPER:
         print("🛡️ 已启用 Cloudflare 绕过模式 (cloudscraper)\n")
     else:
-        print("❌ 未启用 Cloudflare 绕过，建议安装: pip install pydoll-python\n")
+        print("❌ 未启用 Cloudflare 绕过，建议安装: pip install DrissionPage\n")
     
     if CF_CLEARANCE:
         print(f"🔑 已配置 CF_CLEARANCE (长度: {len(CF_CLEARANCE)})\n")
