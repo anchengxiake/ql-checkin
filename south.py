@@ -54,10 +54,75 @@ def make_request(method, url, **kwargs):
 
 # ============== Pydoll CF 绕过功能 ==============
 import asyncio
+import platform
 
 # Pydoll 配置
 PYDOLL_HEADLESS = os.getenv("PYDOLL_HEADLESS", "true").lower() == "true"
 PYDOLL_CHROME_PATH = os.getenv("PYDOLL_CHROME_PATH", "").strip()  # 可选：指定 Chrome 路径
+
+
+def find_chrome_path() -> str:
+    """自动检测 Chrome/Chromium 浏览器路径"""
+    system = platform.system()
+    
+    # 如果环境变量已指定，直接使用
+    if PYDOLL_CHROME_PATH:
+        return PYDOLL_CHROME_PATH
+    
+    # 常见浏览器路径
+    paths = []
+    
+    if system == "Windows":
+        # Windows 路径
+        program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        local_app_data = os.environ.get("LOCALAPPDATA", "C:\\Users\\{}\\AppData\\Local".format(os.environ.get("USERNAME", "")))
+        
+        paths = [
+            os.path.join(program_files, "Google\\Chrome\\Application\\chrome.exe"),
+            os.path.join(program_files_x86, "Google\\Chrome\\Application\\chrome.exe"),
+            os.path.join(local_app_data, "Google\\Chrome\\Application\\chrome.exe"),
+            os.path.join(program_files, "Microsoft\\Edge\\Application\\msedge.exe"),
+            os.path.join(program_files_x86, "Microsoft\\Edge\\Application\\msedge.exe"),
+            os.path.join(local_app_data, "Microsoft\\Edge\\Application\\msedge.exe"),
+            # Chromium
+            os.path.join(local_app_data, "Chromium\\Application\\chrome.exe"),
+        ]
+    elif system == "Darwin":  # macOS
+        paths = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    else:  # Linux / Docker / 青龙面板
+        paths = [
+            # 标准 Chrome 路径
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            # Chromium 路径（常见于 Docker）
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            # Alpine Linux 路径
+            "/usr/bin/chromium-browser",
+            # Snap 路径
+            "/snap/bin/chromium",
+            # Edge
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/microsoft-edge-stable",
+            # 青龙面板常见自定义安装路径
+            "/ql/data/scripts/chrome/chrome",
+            "/ql/scripts/chrome/chrome",
+            "/root/chrome/chrome",
+        ]
+    
+    # 检查路径是否存在
+    for path in paths:
+        if os.path.exists(path):
+            print(f"[Pydoll] 自动检测到浏览器: {path}")
+            return path
+    
+    # 未找到浏览器
+    return None
 
 
 def get_pydoll_options(headless: bool = True, proxy: str = None) -> "ChromiumOptions":
@@ -70,9 +135,40 @@ def get_pydoll_options(headless: bool = True, proxy: str = None) -> "ChromiumOpt
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
 
-    # 指定 Chrome 路径（如果配置了）
-    if PYDOLL_CHROME_PATH:
-        options.binary_location = PYDOLL_CHROME_PATH
+    # 自动检测或使用指定的 Chrome 路径
+    chrome_path = find_chrome_path()
+    if chrome_path:
+        options.binary_location = chrome_path
+    else:
+        # 未找到浏览器，提供友好提示
+        system = platform.system()
+        error_msg = f"""
+未找到 Chrome/Chromium 浏览器！请安装或指定路径。
+
+【青龙面板/Docker 环境安装 Chrome 方法】
+
+方法1: 使用 apt 安装 Chromium（推荐）
+  docker exec -it <容器名> bash
+  apt update && apt install -y chromium chromium-driver
+
+方法2: 安装完整 Chrome
+  docker exec -it <容器名> bash
+  wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
+  echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list
+  apt update && apt install -y google-chrome-stable
+
+方法3: 使用自定义 Docker 镜像
+  使用已包含 Chrome 的青龙面板镜像，如:
+  - whyour/qinglong:latest (部分版本已包含)
+  - 或自行构建包含 Chrome 的镜像
+
+方法4: 设置环境变量指定路径
+  在青龙面板 -> 环境变量 中添加:
+  PYDOLL_CHROME_PATH=/usr/bin/chromium
+
+当前系统: {system}
+"""
+        raise Exception(error_msg)
 
     # 增加启动超时
     options.start_timeout = 30
