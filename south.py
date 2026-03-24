@@ -203,32 +203,12 @@ def drissionpage_get_cf_clearance(site_base: str, cookie_str: str = None) -> dic
     try:
         browser = init_browser(headless=DRISSIONPAGE_HEADLESS, proxy=proxy_url or None)
         
-        # 先访问首页设置 cookies
+        # 先访问首页触发 Cloudflare 验证
         print(f"[DrissionPage] 正在访问首页: {site_base}")
         browser.get(site_base)
         time.sleep(2)
         
-        # 如果提供了用户 cookie，设置到浏览器
-        if cookie_str:
-            print("[DrissionPage] 正在设置用户 Cookie...")
-            # 解析并设置 cookies
-            for item in cookie_str.split(';'):
-                item = item.strip()
-                if '=' in item:
-                    name, value = item.split('=', 1)
-                    name = name.strip()
-                    value = value.strip()
-                    if name and value:
-                        try:
-                            browser.set.cookies.set(name, value, domain=site_base.replace('https://', '').replace('http://', ''))
-                        except Exception as e:
-                            print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
-            
-            # 刷新页面使 cookie 生效
-            browser.refresh()
-            time.sleep(2)
-        
-        # 检查是否在 Cloudflare 验证页面
+        # 等待 Cloudflare 验证通过
         max_wait = 30
         waited = 0
         while waited < max_wait:
@@ -243,6 +223,30 @@ def drissionpage_get_cf_clearance(site_base: str, cookie_str: str = None) -> dic
             else:
                 print("[DrissionPage] ✅ Cloudflare 验证已通过")
                 break
+        
+        # 如果提供了用户 cookie，设置到浏览器
+        if cookie_str:
+            print("[DrissionPage] 正在设置用户 Cookie...")
+            domain = site_base.replace('https://', '').replace('http://', '').split('/')[0]
+            
+            # 使用 JavaScript 设置 cookie（最可靠的方式）
+            for item in cookie_str.split(';'):
+                item = item.strip()
+                if '=' in item:
+                    name, value = item.split('=', 1)
+                    name = name.strip()
+                    value = value.strip()
+                    if name and value:
+                        try:
+                            js = f"document.cookie = '{name}={value}; path=/; domain=.{domain}'"
+                            browser.run_js(js)
+                        except Exception as e:
+                            print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
+            
+            print(f"[DrissionPage] ✅ Cookie 设置完成")
+            # 刷新页面使 cookie 生效
+            browser.refresh()
+            time.sleep(2)
         
         # 获取所有 cookies
         cookies = browser.cookies()
@@ -281,7 +285,7 @@ def drissionpage_do_tasks(site_base: str, cookie_str: str) -> dict:
     
     任务流程：
     1. 新任务选择 -> 申请任务 (job)
-    2. 进行中任务 -> 完成任务 (job)  
+    2. 进行中任务 -> 完成任务 (job)
     3. 已完成任务 -> 领取奖励 (job2)
     
     Args:
@@ -295,31 +299,12 @@ def drissionpage_do_tasks(site_base: str, cookie_str: str) -> dict:
     try:
         browser = init_browser(headless=DRISSIONPAGE_HEADLESS, proxy=proxy_url or None)
         
-        # 访问首页并设置 cookies
+        # 先访问首页触发 Cloudflare 验证
         print(f"[DrissionPage] 正在访问首页: {site_base}")
         browser.get(site_base)
         time.sleep(2)
         
-        # 设置用户 cookie
-        print("[DrissionPage] 正在设置用户 Cookie...")
-        domain = site_base.replace('https://', '').replace('http://', '')
-        for item in cookie_str.split(';'):
-            item = item.strip()
-            if '=' in item:
-                name, value = item.split('=', 1)
-                name = name.strip()
-                value = value.strip()
-                if name and value:
-                    try:
-                        browser.set.cookies.set(name, value, domain=domain)
-                    except Exception as e:
-                        print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
-        
-        # 刷新页面使 cookie 生效
-        browser.refresh()
-        time.sleep(2)
-        
-        # 等待 Cloudflare 验证
+        # 等待 Cloudflare 验证通过
         max_wait = 30
         waited = 0
         while waited < max_wait:
@@ -332,6 +317,32 @@ def drissionpage_do_tasks(site_base: str, cookie_str: str) -> dict:
             else:
                 print("[DrissionPage] ✅ Cloudflare 验证已通过")
                 break
+        
+        # 设置用户 cookie（使用 JavaScript 方式，最可靠）
+        print("[DrissionPage] 正在设置用户 Cookie...")
+        domain = site_base.replace('https://', '').replace('http://', '').split('/')[0]
+        
+        cookie_count = 0
+        for item in cookie_str.split(';'):
+            item = item.strip()
+            if '=' in item:
+                name, value = item.split('=', 1)
+                name = name.strip()
+                value = value.strip()
+                if name and value:
+                    try:
+                        # 使用 JavaScript 设置 cookie
+                        js = f"document.cookie = '{name}={value}; path=/'"
+                        browser.run_js(js)
+                        cookie_count += 1
+                    except Exception as e:
+                        print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
+        
+        print(f"[DrissionPage] ✅ 已设置 {cookie_count} 个 Cookie")
+        
+        # 刷新页面使 cookie 生效
+        browser.refresh()
+        time.sleep(2)
         
         log_lines = [f"站点: {site_base}"]
         
