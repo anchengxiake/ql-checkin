@@ -207,7 +207,7 @@ async def pydoll_bypass_cf_and_get_cookies(url: str, existing_cookie: str = None
     
     Args:
         url: 目标 URL
-        existing_cookie: 现有的 cookie 字符串（可选）
+        existing_cookie: 现有的 cookie 字符串（可选，将通过 URL 参数传递）
     
     Returns:
         包含 cookies 和页面 HTML 的字典
@@ -222,21 +222,6 @@ async def pydoll_bypass_cf_and_get_cookies(url: str, existing_cookie: str = None
 
         print(f"[Pydoll] 正在访问: {url}")
 
-        # 如果有现有 cookie，先设置
-        if existing_cookie:
-            # 解析 cookie 字符串并设置
-            for item in existing_cookie.split(";"):
-                item = item.strip()
-                if "=" in item:
-                    name, value = item.split("=", 1)
-                    name = name.strip()
-                    value = value.strip()
-                    if name and value:
-                        try:
-                            await tab.set_cookie(name, value, url=url)
-                        except Exception as e:
-                            print(f"[Pydoll] 设置 cookie {name} 失败: {e}")
-
         # 自动检测并处理 Cloudflare
         try:
             async with tab.expect_and_bypass_cloudflare_captcha():
@@ -244,20 +229,48 @@ async def pydoll_bypass_cf_and_get_cookies(url: str, existing_cookie: str = None
             print("[Pydoll] Cloudflare 验证已通过")
         except Exception as e:
             print(f"[Pydoll] Cloudflare 处理: {e}")
-            await tab.go_to(url)
+            # 即使超时也继续尝试访问
+            try:
+                await tab.go_to(url)
+            except Exception:
+                pass
 
-        # 等待页面加载
-        await asyncio.sleep(3)
+        # 等待页面加载完成
+        await asyncio.sleep(5)
 
         # 获取所有 cookies
         cookies = await tab.get_cookies()
-        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+        cookie_dict = {c['name']: c['value'] for c in cookies}
+        cookie_str = "; ".join([f"{name}={value}" for name, value in cookie_dict.items()])
 
         # 获取页面 HTML
         html = await tab.page_source
 
+        # 检查是否仍然在 Cloudflare 验证页面
+        html_lower = html.lower()
+        if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
+            print("[Pydoll] ⚠️ 页面仍显示 Cloudflare 验证，可能需要更长时间等待")
+            # 再等待一段时间
+            await asyncio.sleep(10)
+            html = await tab.page_source
+            cookies = await tab.get_cookies()
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+            cookie_str = "; ".join([f"{name}={value}" for name, value in cookie_dict.items()])
+
+        # 如果有用户 cookie，合并到返回的 cookie 中
+        if existing_cookie:
+            for item in existing_cookie.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    name, value = item.split("=", 1)
+                    name = name.strip()
+                    value = value.strip()
+                    if name and value and name not in cookie_dict:
+                        cookie_str += f"; {name}={value}"
+
         return {
             'cookies': cookie_str,
+            'cookie_dict': cookie_dict,
             'html': html,
             'url': await tab.current_url,
         }
@@ -499,6 +512,10 @@ def parse_message_from_response(data: str) -> str:
     return plain[:120] if plain else "接口返回为空"
 
 
+# 全局变量：存储 pydoll 获取的 cookies
+PYDOLL_COOKIES = {}
+
+
 def fetch_task_page(cookie: str, site_base: str, page_suffix: str, use_pydoll: bool = False) -> str:
     """抓取任务页面（自动按响应头编码解析）。
     
@@ -508,6 +525,7 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str, use_pydoll: b
         page_suffix: 页面后缀
         use_pydoll: 是否强制使用 pydoll 绕过 CF
     """
+    global PYDOLL_COOKIES, CF_CLEARANCE
     url = f"{site_base}/plugin.php{page_suffix}"
     
     # 如果启用 pydoll 且可用，直接使用 pydoll
@@ -516,27 +534,75 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str, use_pydoll: b
         try:
             result = run_pydoll_bypass(url, cookie)
             html = result['html']
-            # 更新全局 cf_clearance（如果获取到了）
+            # 存储获取的 cookies
+            PYDOLL_COOKIES = result.get('cookie_dict', {})
             new_cookies = result['cookies']
-            global CF_CLEARANCE
+            
+            # 更新全局 cf_clearance（如果获取到了）
             cf_match = re.search(r'cf_clearance=([^;]+)', new_cookies)
             if cf_match:
                 CF_CLEARANCE = cf_match.group(1)
                 print(f"[Pydoll] 已获取新的 cf_clearance: {CF_CLEARANCE[:20]}...")
+            
+            # 检查是否成功获取任务页面
+            valid_markers = [
+                "社区论坛任务",
+                "按这申请此任务",
+                "领取此奖励",
+                "startjob(",
+                "H_name-tasks",
+            ]
+            if any(m in html for m in valid_markers):
+                print("[Pydoll] ✅ 成功获取任务页面")
+                return html
+            
+            # 如果仍然不是任务页面，检查是否需要登录
+            if "您还没有登录或注册" in html:
+                raise Exception("Cookie 无效或已过期：站点返回未登录")
+            
+            # 打印页面信息用于调试
+            m_title = re.search(r"<title>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+            title = m_title.group(1).strip() if m_title else "未知页面"
+            print(f"[Pydoll] 页面标题: {title}")
+            
+            # 如果页面仍然显示 Cloudflare，说明绕过失败
+            html_lower = html.lower()
+            if "cloudflare" in html_lower or "just a moment" in html_lower:
+                raise Exception("Pydoll 绕过 Cloudflare 失败，页面仍显示验证")
+            
+            # 其他情况，返回 HTML 让后续处理
+            return html
+            
         except Exception as e:
             print(f"[Pydoll] 绕过失败: {e}")
             raise Exception(f"Pydoll CF 绕过失败: {e}")
-    else:
-        # 常规请求方式
-        cookie_with_cf = add_cf_clearance_to_cookie(cookie)
-        headers = {
-            **base_headers,
-            "cookie": cookie_with_cf,
-            "referer": f"{site_base}/",
-        }
-        response = make_request("GET", url, headers=headers, timeout=request_timeout, proxies=proxies)
-        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
-        html = response.text or ""
+    
+    # 常规请求方式
+    # 优先使用 pydoll 获取的 cookies
+    merged_cookie = cookie
+    if PYDOLL_COOKIES:
+        # 合并 pydoll cookies 和用户 cookie
+        cookie_dict = {}
+        for item in cookie.split(";"):
+            item = item.strip()
+            if "=" in item:
+                name, value = item.split("=", 1)
+                cookie_dict[name.strip()] = value.strip()
+        # 添加 pydoll cookies（不覆盖用户 cookie）
+        for name, value in PYDOLL_COOKIES.items():
+            if name not in cookie_dict:
+                cookie_dict[name] = value
+        merged_cookie = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
+    
+    cookie_with_cf = add_cf_clearance_to_cookie(merged_cookie)
+    headers = {
+        **base_headers,
+        "cookie": cookie_with_cf,
+        "referer": f"{site_base}/",
+    }
+    response = make_request("GET", url, headers=headers, timeout=request_timeout, proxies=proxies)
+    response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+    html = response.text or ""
 
     html_lower = html.lower()
     if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
