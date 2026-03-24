@@ -8,9 +8,30 @@ import re
 import sys
 import time
 import random
-import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+
+# 尝试导入 cloudscraper 用于绕过 Cloudflare，如未安装则回退到 requests
+try:
+    import cloudscraper
+    scraper = cloudscraper.create_scraper()
+    USE_CLOUDSCRAPER = True
+    print("✅ 已加载 cloudscraper，可自动处理 Cloudflare 验证")
+except ImportError:
+    import requests
+    scraper = None
+    USE_CLOUDSCRAPER = False
+    print("⚠️ 未安装 cloudscraper，使用标准 requests（可能被 Cloudflare 拦截）")
+    print("   如需绕过 Cloudflare，请执行: pip install cloudscraper")
+
+# 包装请求函数，统一使用 cloudscraper 或 requests
+def make_request(method, url, **kwargs):
+    """统一请求函数，优先使用 cloudscraper 绕过 Cloudflare"""
+    if USE_CLOUDSCRAPER and scraper:
+        req_func = getattr(scraper, method.lower())
+    else:
+        req_func = getattr(requests, method.lower())
+    return req_func(url, **kwargs)
 
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
@@ -217,7 +238,7 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
         "cookie": cookie,
         "referer": f"{site_base}/",
     }
-    response = requests.get(url, headers=headers, timeout=request_timeout, proxies=proxies)
+    response = make_request("GET", url, headers=headers, timeout=request_timeout, proxies=proxies)
     response.encoding = response.apparent_encoding or response.encoding or "utf-8"
     html = response.text or ""
 
@@ -275,7 +296,7 @@ def build_job_params(action: str, cid: str, verify: str):
 
 
 def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
-    response = requests.get(url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
+    response = make_request("GET", url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
     response.encoding = "utf-8"
     data = response.text
 
@@ -344,6 +365,11 @@ def main():
         print(f"✅ 已启用代理: {proxy_url}\n")
     else:
         print("⚠️ 未启用代理：Cloudflare 站点大概率会拦截机房IP\n")
+    
+    if USE_CLOUDSCRAPER:
+        print("🛡️ 已启用 Cloudflare 绕过模式 (cloudscraper)\n")
+    else:
+        print("❌ 未启用 Cloudflare 绕过，建议安装: pip install cloudscraper\n")
 
     summary = []
     for idx, ck in enumerate(cookies, start=1):
