@@ -11,6 +11,17 @@ import random
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
+# 尝试导入 pydoll 用于绕过 Cloudflare（优先级最高）
+USE_PYDOLL = False
+try:
+    from pydoll.browser import Chrome
+    from pydoll.browser.options import ChromiumOptions
+    USE_PYDOLL = True
+    print("✅ 已加载 pydoll，可自动绕过 Cloudflare 验证")
+except ImportError:
+    print("⚠️ 未安装 pydoll-python，尝试使用 cloudscraper")
+    print("   如需自动绕过 Cloudflare，请执行: pip install pydoll-python")
+
 # 尝试导入 cloudscraper 用于绕过 Cloudflare，如未安装则回退到 requests
 try:
     import cloudscraper
@@ -21,8 +32,14 @@ except ImportError:
     import requests
     scraper = None
     USE_CLOUDSCRAPER = False
-    print("⚠️ 未安装 cloudscraper，使用标准 requests（可能被 Cloudflare 拦截）")
-    print("   如需绕过 Cloudflare，请执行: pip install cloudscraper")
+    if not USE_PYDOLL:
+        print("⚠️ 未安装 cloudscraper，使用标准 requests（可能被 Cloudflare 拦截）")
+        print("   如需绕过 Cloudflare，请执行: pip install cloudscraper")
+
+# 从环境变量读取 cf_clearance（用于手动绕过 Cloudflare）
+CF_CLEARANCE = os.getenv("CF_CLEARANCE", "").strip()
+if CF_CLEARANCE:
+    print(f"✅ 已配置 CF_CLEARANCE，长度: {len(CF_CLEARANCE)}")
 
 # 包装请求函数，统一使用 cloudscraper 或 requests
 def make_request(method, url, **kwargs):
@@ -30,8 +47,164 @@ def make_request(method, url, **kwargs):
     if USE_CLOUDSCRAPER and scraper:
         req_func = getattr(scraper, method.lower())
     else:
+        import requests
         req_func = getattr(requests, method.lower())
     return req_func(url, **kwargs)
+
+
+# ============== Pydoll CF 绕过功能 ==============
+import asyncio
+
+# Pydoll 配置
+PYDOLL_HEADLESS = os.getenv("PYDOLL_HEADLESS", "true").lower() == "true"
+PYDOLL_CHROME_PATH = os.getenv("PYDOLL_CHROME_PATH", "").strip()  # 可选：指定 Chrome 路径
+
+
+def get_pydoll_options(headless: bool = True, proxy: str = None) -> "ChromiumOptions":
+    """获取 pydoll 浏览器配置"""
+    options = ChromiumOptions()
+    options.headless = headless
+
+    # 服务器/Docker 环境必需参数
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+
+    # 指定 Chrome 路径（如果配置了）
+    if PYDOLL_CHROME_PATH:
+        options.binary_location = PYDOLL_CHROME_PATH
+
+    # 增加启动超时
+    options.start_timeout = 30
+
+    # 反检测配置 - 模拟真实用户浏览器
+    fake_engagement_time = int(time.time()) - (7 * 24 * 60 * 60)
+
+    options.browser_preferences = {
+        'profile': {
+            'last_engagement_time': fake_engagement_time,
+            'exit_type': 'Normal',
+            'exited_cleanly': True,
+            'default_content_setting_values': {
+                'notifications': 2,
+                'geolocation': 2,
+            },
+        },
+        'session': {
+            'restore_on_startup': 1,
+        },
+    }
+
+    # WebRTC 泄露保护
+    options.webrtc_leak_protection = True
+
+    # 代理配置
+    if proxy:
+        options.add_argument(f'--proxy-server={proxy}')
+
+    return options
+
+
+async def pydoll_bypass_cf_and_get_cookies(url: str, existing_cookie: str = None) -> dict:
+    """
+    使用 pydoll 绕过 Cloudflare 并获取 cookies
+    
+    Args:
+        url: 目标 URL
+        existing_cookie: 现有的 cookie 字符串（可选）
+    
+    Returns:
+        包含 cookies 和页面 HTML 的字典
+    """
+    if not USE_PYDOLL:
+        raise Exception("pydoll-python 未安装，无法使用 CF 绕过功能")
+
+    options = get_pydoll_options(headless=PYDOLL_HEADLESS, proxy=proxy_url or None)
+
+    async with Chrome(options=options) as browser:
+        tab = await browser.start()
+
+        print(f"[Pydoll] 正在访问: {url}")
+
+        # 如果有现有 cookie，先设置
+        if existing_cookie:
+            # 解析 cookie 字符串并设置
+            for item in existing_cookie.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    name, value = item.split("=", 1)
+                    name = name.strip()
+                    value = value.strip()
+                    if name and value:
+                        try:
+                            await tab.set_cookie(name, value, url=url)
+                        except Exception as e:
+                            print(f"[Pydoll] 设置 cookie {name} 失败: {e}")
+
+        # 自动检测并处理 Cloudflare
+        try:
+            async with tab.expect_and_bypass_cloudflare_captcha():
+                await tab.go_to(url)
+            print("[Pydoll] Cloudflare 验证已通过")
+        except Exception as e:
+            print(f"[Pydoll] Cloudflare 处理: {e}")
+            await tab.go_to(url)
+
+        # 等待页面加载
+        await asyncio.sleep(3)
+
+        # 获取所有 cookies
+        cookies = await tab.get_cookies()
+        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+
+        # 获取页面 HTML
+        html = await tab.page_source
+
+        return {
+            'cookies': cookie_str,
+            'html': html,
+            'url': await tab.current_url,
+        }
+
+
+def run_pydoll_bypass(url: str, existing_cookie: str = None) -> dict:
+    """同步包装 pydoll CF 绕过函数"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    if loop.is_running():
+        # 如果在异步环境中，创建新的线程运行
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                asyncio.run,
+                pydoll_bypass_cf_and_get_cookies(url, existing_cookie)
+            )
+            return future.result()
+    else:
+        return loop.run_until_complete(
+            pydoll_bypass_cf_and_get_cookies(url, existing_cookie)
+        )
+
+
+def add_cf_clearance_to_cookie(cookie: str) -> str:
+    """将 cf_clearance 添加到 cookie 字符串中"""
+    if not CF_CLEARANCE:
+        return cookie
+    
+    # 检查是否已存在 cf_clearance
+    if "cf_clearance" in cookie:
+        # 替换现有的 cf_clearance
+        pattern = r"cf_clearance=[^;]*"
+        cookie = re.sub(pattern, f"cf_clearance={CF_CLEARANCE}", cookie)
+    else:
+        # 添加 cf_clearance
+        cookie = f"{cookie}; cf_clearance={CF_CLEARANCE}" if cookie else f"cf_clearance={CF_CLEARANCE}"
+    
+    return cookie
 
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
@@ -230,21 +403,67 @@ def parse_message_from_response(data: str) -> str:
     return plain[:120] if plain else "接口返回为空"
 
 
-def fetch_task_page(cookie: str, site_base: str, page_suffix: str) -> str:
-    """抓取任务页面（自动按响应头编码解析）。"""
+def fetch_task_page(cookie: str, site_base: str, page_suffix: str, use_pydoll: bool = False) -> str:
+    """抓取任务页面（自动按响应头编码解析）。
+    
+    Args:
+        cookie: 用户 cookie
+        site_base: 站点基础 URL
+        page_suffix: 页面后缀
+        use_pydoll: 是否强制使用 pydoll 绕过 CF
+    """
     url = f"{site_base}/plugin.php{page_suffix}"
-    headers = {
-        **base_headers,
-        "cookie": cookie,
-        "referer": f"{site_base}/",
-    }
-    response = make_request("GET", url, headers=headers, timeout=request_timeout, proxies=proxies)
-    response.encoding = response.apparent_encoding or response.encoding or "utf-8"
-    html = response.text or ""
+    
+    # 如果启用 pydoll 且可用，直接使用 pydoll
+    if use_pydoll and USE_PYDOLL:
+        print(f"[Pydoll] 使用 pydoll 绕过 Cloudflare 访问: {url}")
+        try:
+            result = run_pydoll_bypass(url, cookie)
+            html = result['html']
+            # 更新全局 cf_clearance（如果获取到了）
+            new_cookies = result['cookies']
+            global CF_CLEARANCE
+            cf_match = re.search(r'cf_clearance=([^;]+)', new_cookies)
+            if cf_match:
+                CF_CLEARANCE = cf_match.group(1)
+                print(f"[Pydoll] 已获取新的 cf_clearance: {CF_CLEARANCE[:20]}...")
+        except Exception as e:
+            print(f"[Pydoll] 绕过失败: {e}")
+            raise Exception(f"Pydoll CF 绕过失败: {e}")
+    else:
+        # 常规请求方式
+        cookie_with_cf = add_cf_clearance_to_cookie(cookie)
+        headers = {
+            **base_headers,
+            "cookie": cookie_with_cf,
+            "referer": f"{site_base}/",
+        }
+        response = make_request("GET", url, headers=headers, timeout=request_timeout, proxies=proxies)
+        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+        html = response.text or ""
 
     html_lower = html.lower()
     if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
-        raise Exception("触发 Cloudflare 验证，当前站点无法直接请求（需与浏览器同出口IP的代理）")
+        # 如果还没使用 pydoll，尝试用 pydoll 绕过
+        if not use_pydoll and USE_PYDOLL:
+            print("⚠️ 触发 Cloudflare 验证，尝试使用 pydoll 绕过...")
+            return fetch_task_page(cookie, site_base, page_suffix, use_pydoll=True)
+        
+        error_msg = """触发 Cloudflare 验证，无法直接请求。
+解决方案：
+1. 安装 pydoll-python（推荐）：
+   pip install pydoll-python
+   
+2. 设置环境变量 CF_CLEARANCE：
+   - 使用浏览器访问站点，通过 F12 -> Network 找到包含 cf_clearance 的请求
+   - 复制 cf_clearance 的值
+   - 设置环境变量: export CF_CLEARANCE="你的值"
+   
+3. 使用与浏览器同出口 IP 的代理：
+   - 设置环境变量: export SOUTHPLUS_PROXY="http://代理地址:端口"
+   
+4. 在本地网络运行脚本（非服务器机房IP）"""
+        raise Exception(error_msg)
 
     if "您还没有登录或注册" in html:
         raise Exception("Cookie 无效或已过期：站点返回未登录")
@@ -296,6 +515,9 @@ def build_job_params(action: str, cid: str, verify: str):
 
 
 def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
+    # 添加 cf_clearance 到 cookie
+    if "cookie" in headers:
+        headers["cookie"] = add_cf_clearance_to_cookie(headers["cookie"])
     response = make_request("GET", url, params=params, headers=headers, timeout=request_timeout, proxies=proxies)
     response.encoding = "utf-8"
     data = response.text
@@ -366,10 +588,22 @@ def main():
     else:
         print("⚠️ 未启用代理：Cloudflare 站点大概率会拦截机房IP\n")
     
-    if USE_CLOUDSCRAPER:
+    # CF 绕过模式提示
+    if USE_PYDOLL:
+        print("🛡️ 已启用 Pydoll Cloudflare 自动绕过模式（推荐）\n")
+        print(f"   无头模式: {PYDOLL_HEADLESS}")
+        if PYDOLL_CHROME_PATH:
+            print(f"   Chrome 路径: {PYDOLL_CHROME_PATH}")
+        print()
+    elif USE_CLOUDSCRAPER:
         print("🛡️ 已启用 Cloudflare 绕过模式 (cloudscraper)\n")
     else:
-        print("❌ 未启用 Cloudflare 绕过，建议安装: pip install cloudscraper\n")
+        print("❌ 未启用 Cloudflare 绕过，建议安装: pip install pydoll-python\n")
+    
+    if CF_CLEARANCE:
+        print(f"🔑 已配置 CF_CLEARANCE (长度: {len(CF_CLEARANCE)})\n")
+    else:
+        print("💡 提示: 如遇到 Cloudflare 验证，可设置 CF_CLEARANCE 环境变量绕过\n")
 
     summary = []
     for idx, ck in enumerate(cookies, start=1):
