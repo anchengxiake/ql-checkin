@@ -644,7 +644,6 @@ def fetch_task_page(cookie: str, site_base: str, page_suffix: str, retry_with_py
             try:
                 cf_clearance = run_pydoll_get_cf_clearance(site_base)
                 if cf_clearance:
-                    global PYDOLL_CF_CLEARANCE
                     PYDOLL_CF_CLEARANCE = cf_clearance
                     CF_CLEARANCE = cf_clearance
                     print(f"[Pydoll] ✅ 已获取 cf_clearance: {cf_clearance[:20]}...")
