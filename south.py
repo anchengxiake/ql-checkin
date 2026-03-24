@@ -738,10 +738,16 @@ def tasks(url: str, params: dict, headers: dict, action_desc: str) -> bool:
 
 
 def run_for_cookie(cookie: str, site_base: str) -> str:
-    """单账号执行签到任务并返回日志"""
+    """单账号执行签到任务并返回日志
+    
+    任务流程：
+    1. 新任务选择 -> 申请任务 (job)
+    2. 进行中任务 -> 完成任务 (job)
+    3. 已完成任务 -> 领取奖励 (job2)
+    """
     url = f"{site_base}/plugin.php"
 
-    headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks-actions-newtasks.html.html"}
+    headers_apply = {**base_headers, "cookie": cookie, "referer": url + "?H_name-tasks.html"}
     headers_finish = {
         **base_headers,
         "cookie": cookie,
@@ -749,35 +755,60 @@ def run_for_cookie(cookie: str, site_base: str) -> str:
         "method": "GET",
         "path": "/plugin.php?H_name-tasks-actions-newtasks.html.html",
         "scheme": "https" if site_base.startswith("https://") else "http",
-        "Referer": url + "?H_name-tasks.html.html",
+        "Referer": url + "?H_name-tasks-actions-newtasks.html.html",
+    }
+    headers_reward = {
+        **base_headers,
+        "cookie": cookie,
+        "authority": site_base.replace("https://", "").replace("http://", ""),
+        "method": "GET",
+        "path": "/plugin.php?H_name-tasks-actions-endtasks.html.html",
+        "scheme": "https" if site_base.startswith("https://") else "http",
+        "Referer": url + "?H_name-tasks-actions-endtasks.html.html",
     }
 
     log_lines = [f"站点: {site_base}"]
 
-    # 1) 申请可做任务（job）
+    # 1) 新任务选择 -> 申请任务（job）
+    log_lines.append("📋 步骤1: 新任务选择 - 申请任务")
     new_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks.html")
     apply_jobs = extract_jobs_from_html(new_tasks_html)
     if apply_jobs:
-        log_lines.append(f"检测到可申请任务: {len(apply_jobs)}")
+        log_lines.append(f"   检测到可申请任务: {len(apply_jobs)}")
     else:
-        log_lines.append("未检测到可申请任务")
+        log_lines.append("   未检测到可申请任务")
 
     for cid, verify in apply_jobs:
         params = build_job_params("job", cid, verify)
-        tasks(url, params, headers_apply, f"申请任务(cid={cid}): ")
+        tasks(url, params, headers_apply, f"   申请任务(cid={cid}): ")
         time.sleep(0.15)
 
-    # 2) 领取已完成任务（job2）
+    # 2) 进行中任务 -> 完成任务（job）
+    log_lines.append("📋 步骤2: 进行中任务 - 完成任务")
     current_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-newtasks.html.html")
-    reward_jobs = extract_jobs_from_html(current_tasks_html)
-    if reward_jobs:
-        log_lines.append(f"检测到可领取任务: {len(reward_jobs)}")
+    complete_jobs = extract_jobs_from_html(current_tasks_html)
+    if complete_jobs:
+        log_lines.append(f"   检测到进行中任务: {len(complete_jobs)}")
     else:
-        log_lines.append("未检测到可领取任务")
+        log_lines.append("   未检测到进行中任务")
+
+    for cid, verify in complete_jobs:
+        params = build_job_params("job", cid, verify)
+        tasks(url, params, headers_finish, f"   完成任务(cid={cid}): ")
+        time.sleep(0.15)
+
+    # 3) 已完成任务 -> 领取奖励（job2）
+    log_lines.append("📋 步骤3: 已完成任务 - 领取奖励")
+    finished_tasks_html = fetch_task_page(cookie, site_base, "?H_name-tasks-actions-endtasks.html.html")
+    reward_jobs = extract_jobs_from_html(finished_tasks_html)
+    if reward_jobs:
+        log_lines.append(f"   检测到可领取奖励: {len(reward_jobs)}")
+    else:
+        log_lines.append("   未检测到可领取奖励")
 
     for cid, verify in reward_jobs:
         params = build_job_params("job2", cid, verify)
-        tasks(url, params, headers_finish, f"领取任务(cid={cid}): ")
+        tasks(url, params, headers_reward, f"   领取奖励(cid={cid}): ")
         time.sleep(0.15)
 
     return "\n".join(log_lines)
