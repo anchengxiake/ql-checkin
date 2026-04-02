@@ -46,6 +46,10 @@ random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
 # 站点配置
 DEFAULT_SITE = "https://south-plus.net"
 
+# 账号密码配置
+SOUTHPLUS_USERNAME = os.getenv("SOUTHPLUS_USERNAME", "").strip()
+SOUTHPLUS_PASSWORD = os.getenv("SOUTHPLUS_PASSWORD", "").strip()
+
 
 def find_chrome_path() -> str:
     """自动检测 Chrome/Chromium 浏览器路径"""
@@ -121,9 +125,13 @@ def get_cookies():
     """读取环境变量 COOKIE，支持 JSON 格式和普通字符串格式"""
     cookie_str = os.environ.get("COOKIE", "").strip()
     
+    # 如果没有 Cookie 但有账号密码，返回 None 表示使用账号密码登录
     if not cookie_str:
-        print("❌ 未设置 COOKIE 环境变量")
-        Push("SouthPlus签到", "❌ 未设置 COOKIE 环境变量")
+        if SOUTHPLUS_USERNAME and SOUTHPLUS_PASSWORD:
+            print("✅ 检测到账号密码配置，将使用账号密码登录")
+            return None, "login"
+        print("❌ 未设置 COOKIE 环境变量，也未设置账号密码")
+        Push("SouthPlus签到", "❌ 未设置 COOKIE 环境变量，也未设置账号密码")
         sys.exit(0)
     
     # 尝试解析为 JSON 格式（旧脚本格式）
@@ -198,6 +206,119 @@ def wait_for_cloudflare(browser, max_wait: int = 60):
     
     print("[DrissionPage] ⚠️ Cloudflare 验证超时")
     return False
+
+
+def login_with_password(browser, site_base: str, username: str, password: str) -> bool:
+    """使用账号密码登录"""
+    try:
+        # 访问登录页面
+        login_url = f"{site_base}/login.php"
+        print(f"[DrissionPage] 访问登录页面: {login_url}")
+        browser.get(login_url)
+        time.sleep(2)
+        
+        # 等待 Cloudflare
+        wait_for_cloudflare(browser)
+        time.sleep(1)
+        
+        # 查找用户名输入框
+        username_input = browser.ele('name:pwuser', timeout=5)
+        if not username_input:
+            # 尝试其他选择器
+            username_input = browser.ele('xpath://input[@name="pwuser"]', timeout=3)
+        if not username_input:
+            username_input = browser.ele('xpath://input[@type="text"]', timeout=3)
+        
+        if not username_input:
+            print("[DrissionPage] ❌ 未找到用户名输入框")
+            return False
+        
+        # 查找密码输入框
+        password_input = browser.ele('name:pwpwd', timeout=5)
+        if not password_input:
+            password_input = browser.ele('xpath://input[@name="pwpwd"]', timeout=3)
+        if not password_input:
+            password_input = browser.ele('xpath://input[@type="password"]', timeout=3)
+        
+        if not password_input:
+            print("[DrissionPage] ❌ 未找到密码输入框")
+            return False
+        
+        # 输入用户名和密码
+        print(f"[DrissionPage] 输入用户名: {username}")
+        username_input.clear()
+        username_input.input(username)
+        time.sleep(0.5)
+        
+        print("[DrissionPage] 输入密码: ******")
+        password_input.clear()
+        password_input.input(password)
+        time.sleep(0.5)
+        
+        # 查找登录按钮
+        login_btn = browser.ele('xpath://input[@type="submit"]', timeout=3)
+        if not login_btn:
+            login_btn = browser.ele('xpath://button[@type="submit"]', timeout=3)
+        if not login_btn:
+            login_btn = browser.ele('xpath://input[contains(@value, "登录") or contains(@value, "登錄")]', timeout=3)
+        
+        if not login_btn:
+            print("[DrissionPage] ❌ 未找到登录按钮")
+            return False
+        
+        # 点击登录
+        print("[DrissionPage] 点击登录按钮")
+        login_btn.click()
+        time.sleep(3)
+        
+        # 检查登录是否成功
+        html = browser.html
+        if "您还没有登录" in html or "您还没有登录或注册" in html:
+            print("[DrissionPage] ❌ 登录失败：仍显示未登录状态")
+            return False
+        
+        if "密码错误" in html or "用户名不存在" in html or "登录失败" in html:
+            print("[DrissionPage] ❌ 登录失败：用户名或密码错误")
+            return False
+        
+        print("[DrissionPage] ✅ 登录成功")
+        return True
+    
+    except Exception as e:
+        print(f"[DrissionPage] ❌ 登录过程出错: {e}")
+        return False
+
+
+def run_with_login(site_base: str) -> str:
+    """使用账号密码登录并执行任务"""
+    browser = None
+    try:
+        browser = init_browser()
+        
+        # 先访问首页
+        print(f"[DrissionPage] 访问首页: {site_base}")
+        browser.get(site_base)
+        time.sleep(2)
+        
+        # 等待 Cloudflare
+        wait_for_cloudflare(browser)
+        
+        # 登录
+        if not login_with_password(browser, site_base, SOUTHPLUS_USERNAME, SOUTHPLUS_PASSWORD):
+            return "❌ 账号密码登录失败"
+        
+        # 执行任务
+        return do_task(browser, site_base)
+    
+    except Exception as e:
+        return f"❌ 执行失败: {e}"
+    
+    finally:
+        if browser:
+            try:
+                browser.quit()
+            except:
+                pass
 
 
 def do_task(browser, site_base: str) -> str:
@@ -415,26 +536,41 @@ def main():
     cookie_list, cookie_type = get_cookies()
     site_base = os.getenv("SOUTHPLUS_SITE", DEFAULT_SITE).strip().rstrip("/")
     
-    print(f"\n✅ 检测到 {len(cookie_list)} 个 SouthPlus 账号")
-    print(f"✅ 站点: {site_base}")
-    print(f"✅ 无头模式: {DRISSIONPAGE_HEADLESS}\n")
+    print(f"\n✅ 站点: {site_base}")
+    print(f"✅ 无头模式: {DRISSIONPAGE_HEADLESS}")
     
     summary = []
     
-    for idx, ck in enumerate(cookie_list, start=1):
-        print(f"🙍🏻‍♂️ 第{idx}个账号开始")
+    # 使用账号密码登录模式
+    if cookie_type == "login":
+        print(f"✅ 使用账号密码登录模式")
+        print(f"🙍🏻‍♂️ 开始登录账号: {SOUTHPLUS_USERNAME}")
         try:
-            if cookie_type == "json":
-                result = run_for_cookie_json(ck, site_base)
-            else:
-                result = run_for_cookie_string(ck, site_base)
-            
+            result = run_with_login(site_base)
             print(result)
-            summary.append(f"账号{idx}:\n{result}")
+            summary.append(f"账号 {SOUTHPLUS_USERNAME}:\n{result}")
         except Exception as e:
-            err_msg = f"账号{idx} 失败: {e}"
+            err_msg = f"账号 {SOUTHPLUS_USERNAME} 失败: {e}"
             summary.append(err_msg)
             print(f"❌ {err_msg}")
+    else:
+        # 使用 Cookie 模式
+        print(f"✅ 检测到 {len(cookie_list)} 个 SouthPlus 账号\n")
+        
+        for idx, ck in enumerate(cookie_list, start=1):
+            print(f"🙍🏻‍♂️ 第{idx}个账号开始")
+            try:
+                if cookie_type == "json":
+                    result = run_for_cookie_json(ck, site_base)
+                else:
+                    result = run_for_cookie_string(ck, site_base)
+                
+                print(result)
+                summary.append(f"账号{idx}:\n{result}")
+            except Exception as e:
+                err_msg = f"账号{idx} 失败: {e}"
+                summary.append(err_msg)
+                print(f"❌ {err_msg}")
     
     result = "\n\n".join(summary)
     print("\n========== 本次执行汇总 ==========")
