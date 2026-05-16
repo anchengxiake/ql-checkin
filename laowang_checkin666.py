@@ -855,46 +855,57 @@ class LaowangBrowserSign:
         return None
 
     def _check_verification_passed(self):
-        """检查验证是否已通过"""
-        # 方法1: 验证码容器消失
+        """检查验证是否已通过 — 必须非常准确，避免误判"""
+        # 方法0: 能否找到 tncode 容器？找不到说明可能已经过了验证
         try:
-            tncode_div = self.browser.ele('#tncode_div', timeout=0.3)
+            tncode_div = self.browser.ele('#tncode_div, .tncode', timeout=0.3)
             if tncode_div:
                 display = self.browser.run_js('return window.getComputedStyle(arguments[0]).display', tncode_div)
-                visibility = self.browser.run_js('return window.getComputedStyle(arguments[0]).visibility', tncode_div)
-                if display == 'none' or visibility == 'hidden':
+                if display == 'none':
+                    return True
+            else:
+                # 找不到 tncode 容器，且找不到滑块 → 验证可能已过
+                try:
+                    self.browser.ele('.slide_block', timeout=0.2)
+                except:
                     return True
         except:
             pass
 
-        # 方法2: 滑块元素消失
-        try:
-            self.browser.ele('.slide_block', timeout=0.3)
-        except:
-            return True
+        # 方法1: 只检查特定的 captcha 结果输入框（不是所有隐藏输入框）
+        captcha_input_ids = ['#clicaptcha-submit-info', '#captcha-result', '#tncode-result',
+                            'input[name="captcha_hash"]', 'input[name="tncode_hash"]']
+        for sel in captcha_input_ids:
+            try:
+                inp = self.browser.ele(sel, timeout=0.2)
+                if inp:
+                    val = inp.value or inp.attr('value') or ''
+                    if val and len(str(val)) > 20:
+                        logger.debug(f"验证输入框有值: {sel}")
+                        return True
+            except:
+                pass
 
-        # 方法3: 检查验证输入框有值
+        # 方法2: 只检查 body 可视文本中的成功标志（不检查 HTML 源码）
         try:
-            inputs = self.browser.eles('input[type="hidden"]')
-            for inp in inputs:
-                val = inp.value
-                if val and len(str(val)) > 10:
+            body_ele = self.browser.ele('body', timeout=0.3)
+            if body_ele:
+                body_text = body_ele.text
+                if any(k in body_text for k in ['验证成功', '验证通过', '校验成功']):
                     return True
         except:
             pass
 
-        # 方法4: 页面包含成功标志
-        html = self.browser.html
-        if any(k in html for k in ['验证成功', 'captcha-success', '验证通过', 'success']):
-            return True
-
-        # 方法5: 检查是否出现错误提示
+        # 方法3: 检查是否有 tnc 滑块验证通过后的跳转/状态变化
         try:
-            error_ele = self.browser.ele('.tncode-error, .error-msg, .alert-error', timeout=0.3)
-            if error_ele:
-                logger.debug(f"验证错误提示: {error_ele.text}")
+            # tncode 验证通过后，通常会 show/hide 一些元素
+            slider = self.browser.ele('.slide_block', timeout=0.3)
+            if slider:
+                # 滑块还在，验证一定没通过
+                return False
         except:
-            pass
+            # 滑块找不到了，可能是通过了
+            return True
 
         return False
 
@@ -1076,50 +1087,80 @@ class LaowangBrowserSign:
             return False, "浏览器初始化失败"
 
         try:
-            # 访问登录页面
-            logger.info("🌐 正在访问登录页面...")
-            self.browser.get(LOGIN_URL)
-            time.sleep(2)
+            login_attempts = 3
 
-            # 输入账号密码
-            logger.info(f"🔐 正在输入账号: {self.username}")
-            self.browser.ele('@name=username').input(self.username)
-            self.browser.ele('@name=password').input(self.password)
+            for login_try in range(login_attempts):
+                if login_try > 0:
+                    logger.info(f"🔄 登录重试 {login_try+1}/{login_attempts}...")
+                    time.sleep(2)
 
-            # 处理滑块验证
-            try:
-                tncode = self.browser.ele('.tncode', timeout=3)
-                if tncode:
-                    text_span = self.browser.ele('.tncode-text', timeout=1)
-                    if text_span and '点击' in text_span.text:
-                        logger.info("🖱️ 点击触发滑块验证...")
-                        tncode.click()
-                        time.sleep(0.5)
+                try:
+                    # 访问登录页面
+                    logger.info("🌐 正在访问登录页面...")
+                    self.browser.get(LOGIN_URL)
+                    time.sleep(2)
 
-                    if not self.pass_slide_verification():
-                        return False, f"❌ {self.username}: 滑块验证失败\n💡 建议: 使用浏览器手动登录一次，复制 Cookie 使用 Cookie 模式"
-            except Exception as e:
-                logger.debug(f"未触发滑块验证或无需验证: {e}")
+                    # 输入账号密码
+                    logger.info(f"🔐 正在输入账号: {self.username}")
+                    self.browser.ele('@name=username').input(self.username)
+                    self.browser.ele('@name=password').input(self.password)
 
-            # 点击登录
-            logger.info("🔑 正在提交登录...")
-            self.browser.ele('@name=loginsubmit').click()
+                    # 处理滑块验证
+                    has_captcha = True
+                    try:
+                        tncode = self.browser.ele('.tncode', timeout=3)
+                        if tncode:
+                            text_span = self.browser.ele('.tncode-text', timeout=1)
+                            if text_span and '点击' in text_span.text:
+                                logger.info("🖱️ 点击触发滑块验证...")
+                                tncode.click()
+                                time.sleep(0.5)
 
-            # 等待跳转
-            try:
-                self.browser.wait.url_change(BASE_URL, timeout=15)
-            except:
-                # 可能已经在首页或跳转到了其他页面
-                pass
+                            if not self.pass_slide_verification():
+                                logger.warning("⚠️ 滑块验证破解未成功，重试登录流程...")
+                                continue  # 重试整个登录流程
+                        else:
+                            has_captcha = False
+                    except Exception as e:
+                        has_captcha = False
+                        logger.debug(f"未找到 tncode 验证码: {e}")
 
-            time.sleep(2)
+                    # 点击登录
+                    logger.info("🔑 正在提交登录...")
+                    self.browser.ele('@name=loginsubmit').click()
 
-            # 验证登录成功
+                    # 等待跳转或页面更新
+                    time.sleep(3)
+
+                    # 验证登录成功
+                    current_html = self.browser.html
+                    if 'member.php?mod=logging&action=logout' in current_html:
+                        break  # 登录成功！
+
+                    # 登录失败，检查原因
+                    current_url = self.browser.url
+                    logger.warning(f"⚠️ 登录可能未成功，当前 URL: {current_url[:80]}")
+
+                    if 'member.php?mod=logging' in current_url:
+                        if has_captcha:
+                            logger.warning("⚠️ 滑块验证可能未正确通过，正在重试...")
+                            continue
+                        else:
+                            logger.error("❌ 登录失败（无验证码但密码可能错误）")
+                            return False, f"❌ {self.username}: 登录失败，请检查账号密码"
+
+                    continue
+
+                except Exception as e:
+                    logger.error(f"登录流程异常: {e}")
+                    if login_try < login_attempts - 1:
+                        continue
+                    return False, f"❌ {self.username}: 浏览器操作失败: {e}"
+
+            # 确认登录成功后再进行后续操作
             current_html = self.browser.html
             if 'member.php?mod=logging&action=logout' not in current_html:
-                # 检查是否在登录页（说明登录失败）
-                if 'member.php?mod=logging' in self.browser.url:
-                    return False, f"❌ {self.username}: 登录失败，可能被拦截"
+                return False, f"❌ {self.username}: 登录失败（{login_attempts}次尝试后仍失败）"
 
             # 提取用户名
             try:
@@ -1172,15 +1213,15 @@ class LaowangBrowserSign:
                     if any(x in result_html for x in ['今日已签', 'btnvisted', '已签到', '签到成功']):
                         return True, f"✅ {self.display_name} 签到成功"
 
-                    return True, f"✅ {self.display_name} 签到完成"
+                    # 没有明确成功标志，当作失败
+                    logger.warning(f"签到按钮已点击但未检测到成功标志，URL: {self.browser.url[:80]}")
+                    return False, f"❌ {self.display_name}: 签到结果不明确，请检查日志"
                 else:
                     return False, f"❌ {self.display_name}: 未找到签到按钮"
 
             except Exception as e:
                 return False, f"❌ {self.display_name}: 签到操作失败: {e}"
 
-        except Exception as e:
-            return False, f"❌ {self.username}: 浏览器操作失败: {e}"
         finally:
             if self.browser:
                 try:
