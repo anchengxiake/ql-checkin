@@ -129,14 +129,18 @@ def parse_ajax_response(resp_text):
         msg_clean = re.sub(r'<[^>]+>', '', msg).strip()
 
         # 判断真正的成功标志（基于 CDATA 内部内容）
-        success_keywords = ['签到成功', '恭喜您', '已获得', '签到成功', '奖励']
+        # 注意：这些是子串匹配，关键词要足够精确避免误判
+        success_keywords = ['签到成功', '恭喜您', '已获得奖励', '签到奖励']
         already_keywords = ['已经签到', '今日已签', '已签到', '请勿重复']
-        fail_keywords = ['请先登录', '登录', '失败', '错误', '无法', '不能', '过期', '失效']
+        # 必须是明确的失败标识，不要包含太宽泛的词（如单独的"登录"会误匹配"登录成功"）
+        fail_keywords = ['请先登录', '登录后', '需要登录', '登录失败', '密码错误',
+                        '表单错误', '验证失败', '无权', '已过期', '已失效', 'Cookie']
 
-        # 优先检查明确的失败/已签到标志
+        # 优先检查明确的已签到标志
         if any(k in msg_clean for k in already_keywords):
             return True, f"已签到 ({msg_clean})", raw
 
+        # 再检查明确的失败标志
         if any(k in msg_clean for k in fail_keywords):
             return False, f"签到失败: {msg_clean}", raw
 
@@ -144,16 +148,26 @@ def parse_ajax_response(resp_text):
         if any(k in msg_clean for k in success_keywords):
             return True, f"签到成功 ({msg_clean})", raw
 
-        # 如果都不匹配，返回 CDATA 内容让用户判断
+        # CDATA 内容不命中任何已知关键词，输出供调试
+        logger.warning(f"未知的CDATA响应: {msg_clean[:200]}")
         return False, f"未知响应: {msg_clean[:100]}", raw
 
     # 非 CDATA 响应
     if not raw:
         return False, "空响应", raw
 
-    # 检查 HTTP 错误
+    # 太短的响应不可能是成功（Discuz! 的成功响应通常 > 50 字符）
+    if len(raw) < 10:
+        return False, f"响应过短（{len(raw)} 字节）", raw
+
+    # 检查 HTTP 页面（说明服务器返回了错误页）
     if raw.startswith('<!DOCTYPE') or raw.startswith('<html'):
         return False, "返回 HTML 页面而非 AJAX 数据", raw
+
+    # 检查 HTTP 错误状态码常见标记
+    if any(k in raw.lower() for k in ['error', '503', '502', '404', '403']):
+        if len(raw) < 200:  # 简短错误响应
+            return False, f"服务器错误: {raw[:100]}", raw
 
     return False, f"非标准响应: {raw[:100]}", raw
 
@@ -610,13 +624,13 @@ class LaowangLoginSign:
                 if is_success:
                     return True, f"✅ {self.display_name} {msg_detail}"
 
-                # 额外兜底：如果解析工具没命中，但包含明确的成功词（非 CDATA）
-                if '签到成功' in resp_text and 'CDATA' not in resp_text:
-                    return True, f"✅ {self.display_name} 签到成功"
+                # 兜底：非 HTML 响应中精确匹配已知成功标志
+                if not resp_text.startswith('<!') and not resp_text.startswith('<html'):
+                    if any(x in resp_text for x in ['签到成功', '恭喜您获得']):
+                        return True, f"✅ {self.display_name} 签到成功"
 
-                # 已签到（兜底）
-                if any(x in resp_text for x in ['已经签到', '已签到', '今日已签']):
-                    return True, f"✅ {self.display_name} 今日已签到"
+                    if any(x in resp_text for x in ['已经签到', '已签到', '今日已签']):
+                        return True, f"✅ {self.display_name} 今日已签到"
 
                 # 需要验证
                 if any(x in resp_text for x in ['验证', 'captcha', '滑块', '安全验证']):
@@ -758,12 +772,13 @@ class LaowangCookieSign:
             if is_success:
                 return True, f"✅ {self.display_name} {msg_detail}"
 
-            # 兜底检查
-            if '签到成功' in resp_text and 'CDATA' not in resp_text:
-                return True, f"✅ {self.display_name} 签到成功"
+            # 兜底：非 HTML 响应中精确匹配已知成功标志
+            if not resp_text.startswith('<!') and not resp_text.startswith('<html'):
+                if any(x in resp_text for x in ['签到成功', '恭喜您获得']):
+                    return True, f"✅ {self.display_name} 签到成功"
 
-            if any(x in resp_text for x in ['已经签到', '已签到', '今日已签']):
-                return True, f"✅ {self.display_name} 今日已签到"
+                if any(x in resp_text for x in ['已经签到', '已签到', '今日已签']):
+                    return True, f"✅ {self.display_name} 今日已签到"
 
             if any(x in resp_text for x in ['验证', 'captcha', '滑块']):
                 return False, f"⚠️ {self.display_name} 需要滑块验证"
@@ -791,11 +806,15 @@ class LaowangBrowserSign:
             import DrissionPage
 
             co = DrissionPage.ChromiumOptions()
-            co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0.36')
+            # 设置更真实的 User-Agent
+            co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             co.set_pref('credentials_enable_service', False)
             co.set_argument('--hide-crash-restore-bubble')
             co.set_argument('--no-sandbox')
             co.set_argument('--disable-gpu')
+            co.set_argument('--disable-blink-features=AutomationControlled')
+            co.set_argument('--disable-dev-shm-usage')
+            co.set_argument('--window-size=1920,1080')
             co.auto_port()
             co.headless(True)
 
@@ -812,95 +831,244 @@ class LaowangBrowserSign:
             logger.error(f"❌ 浏览器初始化失败: {e}")
             return False
 
-    def pass_slide_verification(self):
-        """处理滑块验证 - 结合点击触发和暴力破解"""
-        max_attempts = 30
-        attempt = 0
-
-        # 先尝试点击 tncode 触发验证（参考老魔脚本）
-        try:
-            tncode = self.browser.ele('.tncode', timeout=3)
-            if tncode:
-                text_span = self.browser.ele('.tncode-text', timeout=1)
-                if text_span and '点击进行安全验证' in text_span.text:
-                    logger.info("🖱️ 点击触发滑块验证...")
-                    tncode.click()
-                    time.sleep(1)
-        except Exception as e:
-            logger.debug(f"点击触发验证失败: {e}")
-
-        # 暴力破解滑块
-        while attempt < max_attempts:
-            attempt += 1
+    def _find_slider_element(self):
+        """查找滑块元素（尝试多种选择器）"""
+        selectors = [
+            '.slide_block',
+            '.tncode-slider',
+            '.slider',
+            '[class*="slide_block"]',
+            '[class*="tncode"]',
+            '.nc_iconfont',
+            '.btn_slide',
+            '.handler',
+            '.slide-btn',
+        ]
+        for selector in selectors:
             try:
-                # 等待滑块出现
-                self.browser.wait.ele_displayed('.slide_block', timeout=2)
-                slider = self.browser.ele('.slide_block')
-                time.sleep(0.1)
+                ele = self.browser.ele(selector, timeout=1)
+                if ele:
+                    logger.debug(f"找到滑块元素: {selector}")
+                    return ele
+            except:
+                continue
+        return None
 
-                if attempt == 1:
-                    logger.info(f"🤖 开始破解滑块验证...")
+    def _check_verification_passed(self):
+        """检查验证是否已通过"""
+        # 方法1: 验证码容器消失
+        try:
+            tncode_div = self.browser.ele('#tncode_div', timeout=0.3)
+            if tncode_div:
+                display = self.browser.run_js('return window.getComputedStyle(arguments[0]).display', tncode_div)
+                visibility = self.browser.run_js('return window.getComputedStyle(arguments[0]).visibility', tncode_div)
+                if display == 'none' or visibility == 'hidden':
+                    return True
+        except:
+            pass
 
-                # 尝试不同距离（更精细的步进）
-                for distance in range(60, 181, 8):
-                    try:
-                        # 重置滑块位置（如果可能）
-                        self.browser.actions.move_to(slider)
-                        time.sleep(0.05)
+        # 方法2: 滑块元素消失
+        try:
+            self.browser.ele('.slide_block', timeout=0.3)
+        except:
+            return True
 
-                        # 拖动滑块
-                        self.browser.actions.hold()
-                        # 分段移动，模拟真人
-                        steps = 3
-                        step_distance = distance / steps
-                        for i in range(steps):
-                            self.browser.actions.move(step_distance, 0)
-                            time.sleep(0.05)
-                        self.browser.actions.release()
+        # 方法3: 检查验证输入框有值
+        try:
+            inputs = self.browser.eles('input[type="hidden"]')
+            for inp in inputs:
+                val = inp.value
+                if val and len(str(val)) > 10:
+                    return True
+        except:
+            pass
 
-                        time.sleep(0.6)
+        # 方法4: 页面包含成功标志
+        html = self.browser.html
+        if any(k in html for k in ['验证成功', 'captcha-success', '验证通过', 'success']):
+            return True
 
-                        # 检查验证是否通过（多种方式）
-                        # 方式1: 检查 tncode_div 是否隐藏
-                        try:
-                            tncode_div = self.browser.ele('#tncode_div', timeout=0.5)
-                            display_style = self.browser.run_js('return arguments[0].style.display', tncode_div)
-                            if display_style == 'none' or display_style == '':
-                                logger.info("✅ 滑块验证通过！")
-                                return True
-                        except:
-                            pass
+        # 方法5: 检查是否出现错误提示
+        try:
+            error_ele = self.browser.ele('.tncode-error, .error-msg, .alert-error', timeout=0.3)
+            if error_ele:
+                logger.debug(f"验证错误提示: {error_ele.text}")
+        except:
+            pass
 
-                        # 方式2: 检查验证输入框是否有值（参考老魔脚本）
-                        try:
-                            captcha_input = self.browser.ele('#clicaptcha-submit-info', timeout=0.5)
-                            if captcha_input and captcha_input.value and len(captcha_input.value) > 20:
-                                logger.info("✅ 滑块验证通过！(captcha输入框)")
-                                return True
-                        except:
-                            pass
+        return False
 
-                        # 方式3: 检查页面是否包含成功标志
-                        if '验证成功' in self.browser.html or 'captcha-success' in self.browser.html:
-                            logger.info("✅ 滑块验证通过！(页面标志)")
-                            return True
+    def _try_js_drag(self, slider, distance):
+        """使用 JavaScript 模拟拖动"""
+        try:
+            js_code = '''
+            (function() {
+                var slider = arguments[0];
+                var distance = arguments[1];
+                var rect = slider.getBoundingClientRect();
+                var startX = rect.left + rect.width / 2;
+                var startY = rect.top + rect.height / 2;
+                var endX = startX + distance;
 
-                    except Exception as e:
-                        continue
+                function sendEvent(type, x, y) {
+                    var evt = new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: x,
+                        clientY: y,
+                        screenX: x,
+                        screenY: y,
+                        button: 0,
+                        buttons: type === 'mouseup' ? 0 : 1
+                    });
+                    slider.dispatchEvent(evt);
+                }
 
-            except Exception as e:
-                # 滑块可能已消失（验证已通过）
-                try:
-                    self.browser.ele('.slide_block', timeout=0.5)
-                except:
-                    logger.info("✅ 滑块已消失，验证可能已通过")
+                sendEvent('mousedown', startX, startY);
+
+                var steps = 8 + Math.floor(Math.random() * 5);
+                for (var i = 1; i <= steps; i++) {
+                    var progress = i / steps;
+                    var ease = 1 - Math.pow(1 - progress, 3);
+                    var currentX = startX + (endX - startX) * ease;
+                    var currentY = startY + (Math.random() - 0.5) * 2;
+                    sendEvent('mousemove', currentX, currentY);
+                }
+
+                sendEvent('mouseup', endX, startY);
+                return true;
+            })()
+            '''
+            self.browser.run_js(js_code, slider)
+            return True
+        except Exception as e:
+            logger.debug(f"JS拖动失败: {e}")
+            return False
+
+    def _try_actions_drag(self, slider, distance):
+        """使用 DrissionPage actions 拖动"""
+        try:
+            # 先移到滑块上
+            self.browser.actions.move_to(slider)
+            time.sleep(0.1)
+            # 按住
+            self.browser.actions.hold()
+            time.sleep(0.1)
+
+            # 分段移动，带随机偏移
+            steps = random.randint(5, 10)
+            step_dist = distance / steps
+            for i in range(steps):
+                offset_y = random.randint(-1, 1)
+                self.browser.actions.move(step_dist, offset_y)
+                time.sleep(random.uniform(0.03, 0.08))
+
+            time.sleep(0.1)
+            self.browser.actions.release()
+            return True
+        except Exception as e:
+            logger.debug(f"Actions拖动失败: {e}")
+            return False
+
+    def _refresh_captcha(self):
+        """刷新验证码"""
+        try:
+            refresh_btn = self.browser.ele('.tncode-refresh, .refresh, [class*="refresh"]', timeout=1)
+            if refresh_btn:
+                refresh_btn.click()
+                time.sleep(1)
+                return True
+        except:
+            pass
+        return False
+
+    def pass_slide_verification(self):
+        """处理滑块验证 - 多种策略组合"""
+        logger.info("🤖 开始破解滑块验证...")
+
+        # 策略0: 检查是否已经有验证结果（某些情况验证码会自动通过）
+        if self._check_verification_passed():
+            logger.info("✅ 验证已自动通过")
+            return True
+
+        # 等待滑块出现
+        time.sleep(1.5)
+        slider = self._find_slider_element()
+
+        if not slider:
+            # 再等待一下
+            time.sleep(2)
+            slider = self._find_slider_element()
+
+        if not slider:
+            # 检查是否已经没有滑块了
+            if self._check_verification_passed():
+                logger.info("✅ 滑块已消失，验证通过")
+                return True
+            logger.warning("⚠️ 未找到滑块元素")
+            return False
+
+        logger.info(f"找到滑块元素: {slider}")
+
+        # 尝试获取滑块轨道的长度
+        track_width = 260  # 默认轨道宽度
+        try:
+            track = slider.parent()
+            if track:
+                track_rect = track.rect
+                slider_rect = slider.rect
+                track_width = track_rect.size[0] - slider_rect.size[0]
+                logger.info(f"轨道宽度: {track_width}")
+        except:
+            pass
+
+        # 策略1: 使用 JavaScript 拖动尝试不同距离
+        distances = list(range(50, track_width + 1, 5))
+        # 随机打乱前20个距离，避免规律
+        random.shuffle(distances[:20])
+
+        for i, distance in enumerate(distances):
+            if i > 0 and i % 15 == 0:
+                # 每15次尝试刷新一次验证码
+                logger.info("🔄 刷新验证码...")
+                self._refresh_captcha()
+                time.sleep(1.5)
+                slider = self._find_slider_element()
+                if not slider:
+                    if self._check_verification_passed():
+                        return True
+                    break
+
+            # 先尝试 JS 拖动
+            if self._try_js_drag(slider, distance):
+                time.sleep(0.8)
+                if self._check_verification_passed():
+                    logger.info(f"✅ 滑块验证通过！(距离: {distance}px)")
                     return True
 
-                logger.debug(f"滑块检测异常: {e}")
-                return False
+            # 如果 JS 拖动不行，尝试 actions 拖动
+            if self._try_actions_drag(slider, distance):
+                time.sleep(0.8)
+                if self._check_verification_passed():
+                    logger.info(f"✅ 滑块验证通过！(距离: {distance}px)")
+                    return True
 
-        logger.error(f"❌ 滑块验证失败，已达最大尝试次数")
+        logger.error("❌ 滑块验证失败，所有距离都尝试过")
         return False
+
+    def _extract_cookies(self):
+        """从浏览器提取 Cookie"""
+        try:
+            cookies = self.browser.cookies()
+            if not cookies:
+                return ""
+
+            cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+            return cookie_str
+        except Exception as e:
+            logger.debug(f"提取Cookie失败: {e}")
+            return ""
 
     def do_sign(self):
         """执行浏览器签到"""
@@ -918,14 +1086,18 @@ class LaowangBrowserSign:
             self.browser.ele('@name=username').input(self.username)
             self.browser.ele('@name=password').input(self.password)
 
-            # 点击滑块触发验证
+            # 处理滑块验证
             try:
-                tncode = self.browser.ele('@class=tncode', timeout=3)
-                tncode.click()
-                logger.info("🤖 检测到滑块验证，开始破解...")
+                tncode = self.browser.ele('.tncode', timeout=3)
+                if tncode:
+                    text_span = self.browser.ele('.tncode-text', timeout=1)
+                    if text_span and '点击' in text_span.text:
+                        logger.info("🖱️ 点击触发滑块验证...")
+                        tncode.click()
+                        time.sleep(0.5)
 
-                if not self.pass_slide_verification():
-                    return False, f"❌ {self.username}: 滑块验证失败"
+                    if not self.pass_slide_verification():
+                        return False, f"❌ {self.username}: 滑块验证失败\n💡 建议: 使用浏览器手动登录一次，复制 Cookie 使用 Cookie 模式"
             except Exception as e:
                 logger.debug(f"未触发滑块验证或无需验证: {e}")
 
@@ -934,8 +1106,37 @@ class LaowangBrowserSign:
             self.browser.ele('@name=loginsubmit').click()
 
             # 等待跳转
-            self.browser.wait.url_change(BASE_URL, timeout=10)
-            logger.info("✅ 登录成功")
+            try:
+                self.browser.wait.url_change(BASE_URL, timeout=15)
+            except:
+                # 可能已经在首页或跳转到了其他页面
+                pass
+
+            time.sleep(2)
+
+            # 验证登录成功
+            current_html = self.browser.html
+            if 'member.php?mod=logging&action=logout' not in current_html:
+                # 检查是否在登录页（说明登录失败）
+                if 'member.php?mod=logging' in self.browser.url:
+                    return False, f"❌ {self.username}: 登录失败，可能被拦截"
+
+            # 提取用户名
+            try:
+                username_match = re.search(r'title="访问我的空间">([^<]+)</a>', current_html)
+                if username_match:
+                    self.display_name = username_match.group(1).strip()
+            except:
+                pass
+
+            logger.info(f"✅ 登录成功: {self.display_name}")
+
+            # 提取 Cookie 供后续使用
+            cookie_str = self._extract_cookies()
+            if cookie_str:
+                logger.info(f"📋 已提取 Cookie（可复制到环境变量使用）:\n{cookie_str[:200]}...")
+                if notify:
+                    notify("老王论坛 Cookie 提取", f"账号: {self.display_name}\nCookie: {cookie_str[:300]}...\n\n请将完整 Cookie 设置到 LAOWANG_COOKIE 环境变量中使用 Cookie 模式（更稳定）")
 
             # 访问签到页面
             logger.info("📝 正在访问签到页面...")
@@ -943,35 +1144,40 @@ class LaowangBrowserSign:
             time.sleep(2)
 
             # 检查是否已签到
-            if '今日已签' in self.browser.html or 'btnvisted' in self.browser.html:
-                return True, f"✅ {self.username} 今日已签到"
+            page_html = self.browser.html
+            if any(x in page_html for x in ['今日已签', 'btnvisted', '已签到']):
+                return True, f"✅ {self.display_name} 今日已签到"
 
             # 点击签到按钮
             try:
-                sign_btn = self.browser.ele('@class=btn J_chkitot', timeout=5)
-                sign_btn.click()
-                time.sleep(1)
+                sign_btn = self.browser.ele('.btn.J_chkitot, .J_chkitot, [class*="chkitot"]', timeout=5)
+                if sign_btn:
+                    sign_btn.click()
+                    time.sleep(2)
 
-                # 再次处理滑块验证（签到时的验证）
-                try:
-                    tncode = self.browser.ele('@class=tncode', timeout=3)
-                    tncode.click()
-                    logger.info("🤖 签到需要滑块验证，开始破解...")
+                    # 检查是否需要再次滑块验证
+                    try:
+                        tncode = self.browser.ele('.tncode', timeout=3)
+                        if tncode:
+                            tncode.click()
+                            logger.info("🤖 签到需要滑块验证，开始破解...")
+                            if not self.pass_slide_verification():
+                                return False, f"❌ {self.display_name}: 签到滑块验证失败"
+                    except:
+                        pass
 
-                    if not self.pass_slide_verification():
-                        return False, f"❌ {self.username}: 签到滑块验证失败"
+                    # 检查签到结果
+                    time.sleep(2)
+                    result_html = self.browser.html
+                    if any(x in result_html for x in ['今日已签', 'btnvisted', '已签到', '签到成功']):
+                        return True, f"✅ {self.display_name} 签到成功"
 
-                    # 提交签到
-                    self.browser.ele('@id=submit-btn').click()
-                    self.browser.wait.url_change(SIGN_PAGE_URL, timeout=10)
-
-                    return True, f"✅ {self.username} 签到成功"
-                except:
-                    # 可能不需要滑块，直接签到成功
-                    return True, f"✅ {self.username} 签到成功"
+                    return True, f"✅ {self.display_name} 签到完成"
+                else:
+                    return False, f"❌ {self.display_name}: 未找到签到按钮"
 
             except Exception as e:
-                return False, f"❌ {self.username}: 签到操作失败: {e}"
+                return False, f"❌ {self.display_name}: 签到操作失败: {e}"
 
         except Exception as e:
             return False, f"❌ {self.username}: 浏览器操作失败: {e}"
