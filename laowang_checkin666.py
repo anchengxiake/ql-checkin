@@ -610,9 +610,8 @@ class LaowangLoginSign:
 
             try:
                 logger.info(f"📝 正在签到...")
-                response = request_with_retry(self.session, 'get', sign_url)
+                response = request_with_retry(self.session, 'get', sign_url, headers={'Referer': SIGN_PAGE_URL})
                 response.encoding = 'utf-8'
-
                 resp_text = response.text
 
                 if DEBUG_MODE:
@@ -758,9 +757,8 @@ class LaowangCookieSign:
                     url = urljoin(BASE_URL, url)
                 sign_url = url
 
-            response = request_with_retry(self.session, 'get', sign_url)
+            response = request_with_retry(self.session, 'get', sign_url, headers={'Referer': SIGN_PAGE_URL})
             response.encoding = 'utf-8'
-
             resp_text = response.text
 
             if DEBUG_MODE:
@@ -909,34 +907,59 @@ class LaowangBrowserSign:
 
         return False
 
-    def _try_js_drag(self, slider, distance):
-        """使用 JavaScript 模拟拖动"""
+    def _try_js_drag(self, distance):
+        """使用 JavaScript 模拟拖动 - 在 document 上分派事件确保 tncode 捕获"""
         try:
             js_code = '''
             (function() {
-                var slider = arguments[0];
-                var distance = arguments[1];
+                var slider = document.querySelector('.slide_block');
+                if (!slider) return 'no_slider';
+
+                var distance = arguments[0];
                 var rect = slider.getBoundingClientRect();
                 var startX = rect.left + rect.width / 2;
                 var startY = rect.top + rect.height / 2;
                 var endX = startX + distance;
 
-                function sendEvent(type, x, y) {
+                function sendMouseEvent(type, x, y) {
                     var evt = new MouseEvent(type, {
                         bubbles: true,
                         cancelable: true,
                         view: window,
-                        clientX: x,
-                        clientY: y,
-                        screenX: x,
-                        screenY: y,
+                        clientX: x, clientY: y,
+                        screenX: x, screenY: y,
                         button: 0,
                         buttons: type === 'mouseup' ? 0 : 1
                     });
+                    // 在 slider 和 document 上都 dispatch
                     slider.dispatchEvent(evt);
+                    document.dispatchEvent(evt);
                 }
 
-                sendEvent('mousedown', startX, startY);
+                function sendTouchEvent(type, x, y) {
+                    try {
+                        var touch = new Touch({
+                            identifier: 0,
+                            target: slider,
+                            clientX: x, clientY: y,
+                            screenX: x, screenY: y,
+                            pageX: x, pageY: y
+                        });
+                        var evt = new TouchEvent(type, {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window,
+                            touches: type === 'touchend' ? [] : [touch],
+                            targetTouches: type === 'touchend' ? [] : [touch],
+                            changedTouches: [touch]
+                        });
+                        slider.dispatchEvent(evt);
+                    } catch(e) {}
+                }
+
+                // 先尝试 mouse 事件
+                sendMouseEvent('mousedown', startX, startY);
+                sendTouchEvent('touchstart', startX, startY);
 
                 var steps = 8 + Math.floor(Math.random() * 5);
                 for (var i = 1; i <= steps; i++) {
@@ -944,39 +967,43 @@ class LaowangBrowserSign:
                     var ease = 1 - Math.pow(1 - progress, 3);
                     var currentX = startX + (endX - startX) * ease;
                     var currentY = startY + (Math.random() - 0.5) * 2;
-                    sendEvent('mousemove', currentX, currentY);
+                    sendMouseEvent('mousemove', currentX, currentY);
+                    sendTouchEvent('touchmove', currentX, currentY);
                 }
 
-                sendEvent('mouseup', endX, startY);
-                return true;
+                sendMouseEvent('mouseup', endX, startY);
+                sendTouchEvent('touchend', endX, startY);
+                return 'ok';
             })()
             '''
-            self.browser.run_js(js_code, slider)
+            result = self.browser.run_js(js_code, distance)
+            if result == 'no_slider':
+                logger.debug("JS拖动: 未找到滑块元素")
+                return False
             return True
         except Exception as e:
             logger.debug(f"JS拖动失败: {e}")
             return False
 
-    def _try_actions_drag(self, slider, distance):
-        """使用 DrissionPage actions 拖动"""
+    def _try_actions_drag(self, distance):
+        """使用 DrissionPage actions 真实鼠标拖动"""
+        slider = self._find_slider_element()
+        if not slider:
+            return False
         try:
-            # 先移到滑块上
             self.browser.actions.move_to(slider)
-            time.sleep(0.1)
-            # 按住
             self.browser.actions.hold()
-            time.sleep(0.1)
+            time.sleep(0.05)
 
-            # 分段移动，带随机偏移
-            steps = random.randint(5, 10)
+            steps = random.randint(6, 12)
             step_dist = distance / steps
             for i in range(steps):
-                offset_y = random.randint(-1, 1)
+                offset_y = random.randint(-2, 2)
                 self.browser.actions.move(step_dist, offset_y)
-                time.sleep(random.uniform(0.03, 0.08))
+                time.sleep(random.uniform(0.02, 0.06))
 
-            time.sleep(0.1)
             self.browser.actions.release()
+            time.sleep(0.3)
             return True
         except Exception as e:
             logger.debug(f"Actions拖动失败: {e}")
@@ -995,74 +1022,62 @@ class LaowangBrowserSign:
         return False
 
     def pass_slide_verification(self):
-        """处理滑块验证 - 多种策略组合"""
+        """处理滑块验证 - JS事件注入 + 真实鼠标拖动"""
         logger.info("🤖 开始破解滑块验证...")
 
-        # 策略0: 检查是否已经有验证结果（某些情况验证码会自动通过）
         if self._check_verification_passed():
             logger.info("✅ 验证已自动通过")
             return True
 
         # 等待滑块出现
         time.sleep(1.5)
-        slider = self._find_slider_element()
-
-        if not slider:
-            # 再等待一下
+        if not self._find_slider_element():
             time.sleep(2)
-            slider = self._find_slider_element()
+            if not self._find_slider_element():
+                if self._check_verification_passed():
+                    logger.info("✅ 滑块已消失，验证通过")
+                    return True
+                logger.warning("⚠️ 未找到滑块元素")
+                return False
 
-        if not slider:
-            # 检查是否已经没有滑块了
-            if self._check_verification_passed():
-                logger.info("✅ 滑块已消失，验证通过")
-                return True
-            logger.warning("⚠️ 未找到滑块元素")
-            return False
-
-        logger.info(f"找到滑块元素: {slider}")
-
-        # 尝试获取滑块轨道的长度
-        track_width = 260  # 默认轨道宽度
+        # 获取轨道宽度
+        track_width = 260
         try:
-            track = slider.parent()
-            if track:
-                track_rect = track.rect
-                slider_rect = slider.rect
-                track_width = track_rect.size[0] - slider_rect.size[0]
-                logger.info(f"轨道宽度: {track_width}")
+            slider = self._find_slider_element()
+            if slider:
+                track = slider.parent()
+                if track:
+                    track_width = max(50, track.rect.size[0] - slider.rect.size[0])
         except:
             pass
+        logger.info(f"轨道宽度约: {track_width}px")
 
-        # 策略1: 使用 JavaScript 拖动尝试不同距离
-        distances = list(range(50, track_width + 1, 5))
-        # 随机打乱前20个距离，避免规律
-        random.shuffle(distances[:20])
+        # 尝试不同距离
+        distances = list(range(30, track_width + 1, 6))
+        random.shuffle(distances[:15])
 
         for i, distance in enumerate(distances):
-            if i > 0 and i % 15 == 0:
-                # 每15次尝试刷新一次验证码
+            if i > 0 and i % 12 == 0:
                 logger.info("🔄 刷新验证码...")
                 self._refresh_captcha()
                 time.sleep(1.5)
-                slider = self._find_slider_element()
-                if not slider:
+                if not self._find_slider_element():
                     if self._check_verification_passed():
                         return True
                     break
 
-            # 先尝试 JS 拖动
-            if self._try_js_drag(slider, distance):
-                time.sleep(0.8)
+            # JS 事件注入拖动
+            if self._try_js_drag(distance):
+                time.sleep(0.6)
                 if self._check_verification_passed():
-                    logger.info(f"✅ 滑块验证通过！(距离: {distance}px)")
+                    logger.info(f"✅ 滑块验证通过！(JS, 距离: {distance}px)")
                     return True
 
-            # 如果 JS 拖动不行，尝试 actions 拖动
-            if self._try_actions_drag(slider, distance):
-                time.sleep(0.8)
+            # 真实鼠标拖动
+            if self._try_actions_drag(distance):
+                time.sleep(0.6)
                 if self._check_verification_passed():
-                    logger.info(f"✅ 滑块验证通过！(距离: {distance}px)")
+                    logger.info(f"✅ 滑块验证通过！(Actions, 距离: {distance}px)")
                     return True
 
         logger.error("❌ 滑块验证失败，所有距离都尝试过")
