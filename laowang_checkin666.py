@@ -853,234 +853,288 @@ class LaowangBrowserSign:
         return None
 
     def _check_verification_passed(self):
-        """检查验证是否已通过 — 必须非常准确，避免误判"""
-        # 方法0: 能否找到 tncode 容器？找不到说明可能已经过了验证
+        """检查验证是否已通过"""
+        result = self.browser.run_js('''
+        (function() {
+            var t = window.tncode;
+            // 方法0: tncode 内部状态
+            if (t && t._result === true) return true;
+
+            // 方法1: tncode 容器隐藏
+            var tncodeDiv = document.getElementById('tncode_div') || document.querySelector('.tncode');
+            if (tncodeDiv && window.getComputedStyle(tncodeDiv).display === 'none') return true;
+
+            // 方法2: 验证结果输入框有值
+            var infoInput = document.getElementById('clicaptcha-submit-info');
+            if (infoInput && infoInput.value && infoInput.value.length > 20) return true;
+
+            // 方法3: 滑块已消失
+            var slider = document.querySelector('.slide_block');
+            if (!slider && !tncodeDiv) return true;
+
+            return false;
+        })()
+        ''')
+        return bool(result)
+
+    def _find_tncode_gap(self):
+        """通过对比背景canvas和完整图片找到正确的滑块缺口位置"""
+        js_code = '''
+        (function() {
+            var t = window.tncode;
+            if (!t || !t._img || !t._img.complete) return -1;
+
+            var bgCanvas = document.querySelector('.tncode_canvas_bg');
+            if (!bgCanvas) return -1;
+
+            // 确保画布已绘制
+            try {
+                t._draw_bg();
+                t._draw_mark();
+            } catch(e) {}
+
+            // 创建临时canvas绘制完整图片（sprite第3行，y=_img_h*2，无缺口）
+            var tempCanvas = document.createElement('canvas');
+            tempCanvas.width = bgCanvas.width;
+            tempCanvas.height = bgCanvas.height;
+            var tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(t._img, 0, t._img_h * 2, t._img_w, t._img_h, 0, 0, tempCanvas.width, tempCanvas.height);
+
+            var bgCtx = bgCanvas.getContext('2d');
+            var bgData = bgCtx.getImageData(0, 0, bgCanvas.width, bgCanvas.height);
+            var fullData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+
+            // mark在canvas上的宽度
+            var markW = Math.round(t._mark_w * bgCanvas.width / t._img_w);
+            var bestX = 0;
+            var bestSum = 0;
+
+            // 扫描找到差异最大的区域（缺口位置）
+            for (var x = 0; x < bgCanvas.width - markW; x++) {
+                var sum = 0;
+                for (var y = 40; y < 110; y += 10) {
+                    for (var w = 0; w < markW; w += 4) {
+                        var idx = (y * bgCanvas.width + (x + w)) * 4;
+                        var dr = bgData.data[idx] - fullData.data[idx];
+                        var dg = bgData.data[idx+1] - fullData.data[idx+1];
+                        var db = bgData.data[idx+2] - fullData.data[idx+2];
+                        sum += dr*dr + dg*dg + db*db;
+                    }
+                }
+                if (sum > bestSum) {
+                    bestSum = sum;
+                    bestX = x;
+                }
+            }
+
+            // 转换为图像坐标（tncode内部使用img_w-mark_w作为maxOffset）
+            var scale = t._img_w / bgCanvas.width;
+            var imageX = Math.round(bestX * scale);
+
+            // 确保在有效范围内 [0, img_w-mark_w]
+            var maxOffset = t._img_w - t._mark_w;
+            if (imageX < 0) imageX = 0;
+            if (imageX > maxOffset) imageX = maxOffset;
+
+            return imageX;
+        })()
+        '''
         try:
-            tncode_div = self.browser.ele('#tncode_div, .tncode', timeout=0.3)
-            if tncode_div:
-                display = self.browser.run_js('return window.getComputedStyle(arguments[0]).display', tncode_div)
-                if display == 'none':
-                    return True
-            else:
-                # 找不到 tncode 容器，且找不到滑块 → 验证可能已过
-                try:
-                    self.browser.ele('.slide_block', timeout=0.2)
-                except:
-                    return True
-        except:
-            pass
+            gap = self.browser.run_js(js_code)
+            if gap and gap > 5:
+                logger.info(f"🎯 Canvas分析: 缺口位置 = {gap}px (max=190)")
+                return int(gap)
+            return -1
+        except Exception as e:
+            logger.debug(f"缺口检测失败: {e}")
+            return -1
 
-        # 方法1: 只检查特定的 captcha 结果输入框（不是所有隐藏输入框）
-        captcha_input_ids = ['#clicaptcha-submit-info', '#captcha-result', '#tncode-result',
-                            'input[name="captcha_hash"]', 'input[name="tncode_hash"]']
-        for sel in captcha_input_ids:
-            try:
-                inp = self.browser.ele(sel, timeout=0.2)
-                if inp:
-                    val = inp.value or inp.attr('value') or ''
-                    if val and len(str(val)) > 20:
-                        logger.debug(f"验证输入框有值: {sel}")
-                        return True
-            except:
-                pass
-
-        # 方法2: 只检查 body 可视文本中的成功标志（不检查 HTML 源码）
-        try:
-            body_ele = self.browser.ele('body', timeout=0.3)
-            if body_ele:
-                body_text = body_ele.text
-                if any(k in body_text for k in ['验证成功', '验证通过', '校验成功']):
-                    return True
-        except:
-            pass
-
-        # 方法3: 检查是否有 tnc 滑块验证通过后的跳转/状态变化
-        try:
-            # tncode 验证通过后，通常会 show/hide 一些元素
-            slider = self.browser.ele('.slide_block', timeout=0.3)
-            if slider:
-                # 滑块还在，验证一定没通过
-                return False
-        except:
-            # 滑块找不到了，可能是通过了
-            return True
-
-        return False
-
-    def _try_js_drag(self, distance):
-        """使用 JavaScript 模拟拖动 - 在 document 上分派事件确保 tncode 捕获"""
+    def _try_tncode_drag(self, distance):
+        """使用 tncode 原生事件处理器模拟拖动 — 最可靠的方式"""
         try:
             js_code = '''
             (function() {
+                var t = window.tncode;
                 var slider = document.querySelector('.slide_block');
-                if (!slider) return 'no_slider';
+                if (!t || !slider) return 'no_handler';
 
                 var distance = arguments[0];
+
+                // 如果上次拖动还在进行，先结束
+                if (t._doing) {
+                    t._block_on_end({preventDefault: function(){}, clientX: 0, clientY: 0});
+                }
+
+                // 重置验证码状态
+                if (typeof t._reset === 'function') {
+                    t._reset();
+                }
+
                 var rect = slider.getBoundingClientRect();
-                var startX = rect.left + rect.width / 2;
-                var startY = rect.top + rect.height / 2;
-                var endX = startX + distance;
+                var startX = Math.round(rect.left + rect.width / 2);
+                var startY = Math.round(rect.top + rect.height / 2);
 
-                function sendMouseEvent(type, x, y) {
-                    var evt = new MouseEvent(type, {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window,
-                        clientX: x, clientY: y,
-                        screenX: x, screenY: y,
-                        button: 0,
-                        buttons: type === 'mouseup' ? 0 : 1
-                    });
-                    // 在 slider 和 document 上都 dispatch
-                    slider.dispatchEvent(evt);
-                    document.dispatchEvent(evt);
+                // 创建假事件对象
+                function makeEvent(x, y) {
+                    return {preventDefault: function(){}, clientX: x, clientY: y, touches: null};
                 }
 
-                function sendTouchEvent(type, x, y) {
-                    try {
-                        var touch = new Touch({
-                            identifier: 0,
-                            target: slider,
-                            clientX: x, clientY: y,
-                            screenX: x, screenY: y,
-                            pageX: x, pageY: y
-                        });
-                        var evt = new TouchEvent(type, {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window,
-                            touches: type === 'touchend' ? [] : [touch],
-                            targetTouches: type === 'touchend' ? [] : [touch],
-                            changedTouches: [touch]
-                        });
-                        slider.dispatchEvent(evt);
-                    } catch(e) {}
-                }
+                // 开始拖动
+                t._block_start_move(makeEvent(startX, startY));
 
-                // 先尝试 mouse 事件
-                sendMouseEvent('mousedown', startX, startY);
-                sendTouchEvent('touchstart', startX, startY);
-
-                var steps = 8 + Math.floor(Math.random() * 5);
+                // 模拟自然拖动轨迹（使用缓动函数 + 随机抖动）
+                var steps = 10 + Math.floor(Math.random() * 6);
+                var prevX = 0;
                 for (var i = 1; i <= steps; i++) {
                     var progress = i / steps;
-                    var ease = 1 - Math.pow(1 - progress, 3);
-                    var currentX = startX + (endX - startX) * ease;
-                    var currentY = startY + (Math.random() - 0.5) * 2;
-                    sendMouseEvent('mousemove', currentX, currentY);
-                    sendTouchEvent('touchmove', currentX, currentY);
+                    // easeOutCubic
+                    var eased = 1 - Math.pow(1 - progress, 3);
+                    var currentDist = Math.round(distance * eased);
+                    // 确保单调递增
+                    if (currentDist <= prevX) currentDist = prevX + 1;
+                    if (currentDist > distance) currentDist = distance;
+                    prevX = currentDist;
+
+                    var currentX = startX + currentDist;
+                    var currentY = startY + (Math.random() - 0.5) * 3;
+                    t._block_on_move(makeEvent(currentX, currentY));
                 }
 
-                sendMouseEvent('mouseup', endX, startY);
-                sendTouchEvent('touchend', endX, startY);
+                // 确保最终位置精确
+                if (prevX < distance) {
+                    t._block_on_move(makeEvent(startX + distance, startY));
+                }
+
+                // 结束拖动 — 这会触发 _send_result
+                t._block_on_end(makeEvent(startX + distance, startY));
+
                 return 'ok';
             })()
             '''
             result = self.browser.run_js(js_code, distance)
-            if result == 'no_slider':
-                logger.debug("JS拖动: 未找到滑块元素")
+            if result == 'no_handler':
+                logger.debug("tncode原生拖动: 未找到处理器")
                 return False
             return True
         except Exception as e:
-            logger.debug(f"JS拖动失败: {e}")
+            logger.debug(f"tncode原生拖动失败: {e}")
             return False
 
-    def _try_actions_drag(self, distance):
-        """使用 DrissionPage actions 真实鼠标拖动"""
-        slider = self._find_slider_element()
-        if not slider:
-            return False
-        try:
-            self.browser.actions.move_to(slider)
-            self.browser.actions.hold()
-            time.sleep(0.05)
-
-            steps = random.randint(6, 12)
-            step_dist = distance / steps
-            for i in range(steps):
-                offset_y = random.randint(-2, 2)
-                self.browser.actions.move(step_dist, offset_y)
-                time.sleep(random.uniform(0.02, 0.06))
-
-            self.browser.actions.release()
+    def _wait_for_tncode_result(self, timeout=5):
+        """轮询等待 tncode 验证结果（不阻塞 JS 主线程）"""
+        check_js = '''
+        (function() {
+            var t = window.tncode;
+            if (!t) return 'no_tncode';
+            if (t._result === true) return 'pass';
+            // 拖动已完成且已发送请求（_doing=false, _result=false, 有track数据）
+            if (t._doing === false && t._track_data && t._track_data.length > 1) return 'done';
+            return 'wait';
+        })()
+        '''
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                result = self.browser.run_js(check_js)
+                if result == 'pass':
+                    return True
+                if result == 'done':
+                    # 请求完成但未通过，可以重试
+                    return 'retry'
+                # 'wait' → 还在进行中，继续等待
+            except:
+                pass
             time.sleep(0.3)
-            return True
-        except Exception as e:
-            logger.debug(f"Actions拖动失败: {e}")
+        # 超时，最后检查一次
+        try:
+            final = self.browser.run_js('return window.tncode && window.tncode._result')
+            return bool(final)
+        except:
             return False
 
-    def _refresh_captcha(self):
-        """刷新验证码"""
+    def _refresh_tncode(self):
+        """刷新 tncode 验证码"""
         try:
-            refresh_btn = self.browser.ele('.tncode-refresh, .refresh, [class*="refresh"]', timeout=1)
-            if refresh_btn:
-                refresh_btn.click()
-                time.sleep(1)
+            result = self.browser.run_js('''
+            (function() {
+                var t = window.tncode;
+                if (t && typeof t.refresh === 'function') {
+                    t.refresh();
+                    return true;
+                }
+                var btn = document.querySelector('.tncode_refresh, .tncode-refresh, [class*="refresh"]');
+                if (btn) { btn.click(); return true; }
+                return false;
+            })()
+            ''')
+            if result:
+                time.sleep(1.5)
                 return True
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"刷新tncode失败: {e}")
         return False
 
     def pass_slide_verification(self):
-        """处理滑块验证 - JS事件注入 + 真实鼠标拖动"""
+        """处理滑块验证 — Canvas分析 + tncode原生事件"""
         logger.info("🤖 开始破解滑块验证...")
 
         if self._check_verification_passed():
             logger.info("✅ 验证已自动通过")
             return True
 
-        # 等待滑块出现
-        time.sleep(1.5)
-        if not self._find_slider_element():
-            time.sleep(2)
-            if not self._find_slider_element():
-                if self._check_verification_passed():
-                    logger.info("✅ 滑块已消失，验证通过")
-                    return True
-                logger.warning("⚠️ 未找到滑块元素")
-                return False
+        # 等待滑块出现并确保 tncode 初始化
+        time.sleep(2)
+        for _ in range(3):
+            if self._find_slider_element():
+                break
+            time.sleep(1)
+        else:
+            if self._check_verification_passed():
+                logger.info("✅ 滑块已消失，验证通过")
+                return True
+            logger.warning("⚠️ 未找到滑块元素")
+            return False
 
-        # 获取轨道宽度
-        track_width = 260
-        try:
-            slider = self._find_slider_element()
-            if slider:
-                track = slider.parent()
-                if track:
-                    track_width = max(50, track.rect.size[0] - slider.rect.size[0])
-        except:
-            pass
-        logger.info(f"轨道宽度约: {track_width}px")
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            if self._check_verification_passed():
+                logger.info("✅ 验证已通过")
+                return True
 
-        # 尝试不同距离
-        distances = list(range(30, track_width + 1, 6))
-        random.shuffle(distances[:15])
+            logger.info(f"🔄 第 {attempt+1}/{max_attempts} 次尝试...")
 
-        for i, distance in enumerate(distances):
-            if i > 0 and i % 12 == 0:
-                logger.info("🔄 刷新验证码...")
-                self._refresh_captcha()
-                time.sleep(1.5)
-                if not self._find_slider_element():
-                    if self._check_verification_passed():
+            # 方法1: Canvas分析获取精确缺口位置
+            gap = self._find_tncode_gap()
+            if gap > 5:
+                logger.info(f"🎯 检测到缺口: {gap}px，开始精确拖动...")
+                if self._try_tncode_drag(gap):
+                    time.sleep(1)
+                    result = self._wait_for_tncode_result(timeout=4)
+                    if result is True:
+                        logger.info("✅ 滑块验证通过！(Canvas精确)")
                         return True
-                    break
+                    elif result == 'retry':
+                        logger.info("⚠️ 验证未通过，刷新重试...")
+                    else:
+                        logger.debug(f"tncode结果: {result}")
 
-            # JS 事件注入拖动
-            if self._try_js_drag(distance):
-                time.sleep(0.6)
-                if self._check_verification_passed():
-                    logger.info(f"✅ 滑块验证通过！(JS, 距离: {distance}px)")
-                    return True
+            # 方法2: 如果Canvas分析失败，尝试几个常见距离
+            if gap <= 5:
+                logger.info("⚠️ Canvas分析失败，尝试常见距离...")
+                for dist in [180, 170, 160, 150, 140, 130, 190, 120, 110, 100]:
+                    if self._try_tncode_drag(dist):
+                        time.sleep(1)
+                        result = self._wait_for_tncode_result(timeout=3)
+                        if result is True:
+                            logger.info(f"✅ 滑块验证通过！(距离: {dist}px)")
+                            return True
 
-            # 真实鼠标拖动
-            if self._try_actions_drag(distance):
-                time.sleep(0.6)
-                if self._check_verification_passed():
-                    logger.info(f"✅ 滑块验证通过！(Actions, 距离: {distance}px)")
-                    return True
+            # 刷新验证码准备下次尝试
+            if attempt < max_attempts - 1:
+                self._refresh_tncode()
+                time.sleep(1)
 
-        logger.error("❌ 滑块验证失败，所有距离都尝试过")
+        logger.error("❌ 滑块验证失败，已达最大尝试次数")
         return False
 
     def _extract_cookies(self):
