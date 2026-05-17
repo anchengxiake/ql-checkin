@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 # 日志配置
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG if os.getenv('LAOWANG_DEBUG', 'false').lower() == 'true' else logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
@@ -853,201 +853,338 @@ class LaowangBrowserSign:
         return None
 
     def _check_verification_passed(self):
-        """检查验证是否已通过"""
+        """检查验证是否已通过 — 仅检查真实通过标志"""
         result = self.browser.run_js('''
-        (function() {
-            var t = window.tncode;
-            // 方法0: tncode 内部状态
-            if (t && t._result === true) return true;
-
-            // 方法1: tncode 容器隐藏
-            var tncodeDiv = document.getElementById('tncode_div') || document.querySelector('.tncode');
-            if (tncodeDiv && window.getComputedStyle(tncodeDiv).display === 'none') return true;
-
-            // 方法2: 验证结果输入框有值
-            var infoInput = document.getElementById('clicaptcha-submit-info');
-            if (infoInput && infoInput.value && infoInput.value.length > 20) return true;
-
-            // 方法3: 滑块已消失
-            var slider = document.querySelector('.slide_block');
-            if (!slider && !tncodeDiv) return true;
-
-            return false;
-        })()
+        var t = window.tncode;
+        // tncode 内部状态：验证成功
+        if (t && t._result === true) return 'tncode_pass';
+        // clicaptcha token 已生成（末尾 _ok 表示通过）
+        var infoInput = document.getElementById('clicaptcha-submit-info');
+        if (infoInput && infoInput.value) {
+            var v = infoInput.value;
+            if (v.indexOf('_ok') > -1 && v.length > 20) return 'token_ok';
+        }
+        return false;
         ''')
-        return bool(result)
+        if result:
+            logger.info(f"✅ 验证通过检测: {result}")
+            return True
+        return False
 
-    def _find_tncode_gap(self):
-        """通过对比背景canvas和完整图片找到正确的滑块缺口位置"""
-        js_code = '''
-        (function() {
+    def _diagnose_verification_state(self):
+        """诊断验证状态，帮助排查服务端拒绝的原因"""
+        try:
+            diag = self.browser.run_js('''
             var t = window.tncode;
-            if (!t || !t._img || !t._img.complete) return -1;
-
-            var bgCanvas = document.querySelector('.tncode_canvas_bg');
-            if (!bgCanvas) return -1;
-
-            // 确保画布已绘制
-            try {
-                t._draw_bg();
-                t._draw_mark();
-            } catch(e) {}
-
-            // 创建临时canvas绘制完整图片（sprite第3行，y=_img_h*2，无缺口）
-            var tempCanvas = document.createElement('canvas');
-            tempCanvas.width = bgCanvas.width;
-            tempCanvas.height = bgCanvas.height;
-            var tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(t._img, 0, t._img_h * 2, t._img_w, t._img_h, 0, 0, tempCanvas.width, tempCanvas.height);
-
-            var bgCtx = bgCanvas.getContext('2d');
-            var bgData = bgCtx.getImageData(0, 0, bgCanvas.width, bgCanvas.height);
-            var fullData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-
-            // mark在canvas上的宽度
-            var markW = Math.round(t._mark_w * bgCanvas.width / t._img_w);
-            var bestX = 0;
-            var bestSum = 0;
-
-            // 扫描找到差异最大的区域（缺口位置）
-            for (var x = 0; x < bgCanvas.width - markW; x++) {
-                var sum = 0;
-                for (var y = 40; y < 110; y += 10) {
-                    for (var w = 0; w < markW; w += 4) {
-                        var idx = (y * bgCanvas.width + (x + w)) * 4;
-                        var dr = bgData.data[idx] - fullData.data[idx];
-                        var dg = bgData.data[idx+1] - fullData.data[idx+1];
-                        var db = bgData.data[idx+2] - fullData.data[idx+2];
-                        sum += dr*dr + dg*dg + db*db;
-                    }
-                }
-                if (sum > bestSum) {
-                    bestSum = sum;
-                    bestX = x;
+            var info = {
+                tncode_result: t ? t._result : 'no tncode',
+                track_data_len: (t && t._track_data) ? t._track_data.length : 0,
+                mark_offset: t ? t._mark_offset : 'N/A',
+                doing: t ? t._doing : 'N/A',
+                err_c: t ? t._err_c : 'N/A',
+                clicaptcha_value: 'N/A',
+                token_has_ok: false
+            };
+            var inp = document.getElementById('clicaptcha-submit-info');
+            if (inp && inp.value) {
+                info.clicaptcha_value = inp.value.substring(0, 60);
+                info.token_has_ok = inp.value.indexOf('_ok') > -1;
+            }
+            // 检查表单中seccode相关字段
+            var seccodeFields = {};
+            var allHidden = document.querySelectorAll('input[type="hidden"]');
+            for (var i = 0; i < allHidden.length; i++) {
+                var name = allHidden[i].name || '';
+                if (name.indexOf('seccode') > -1 || name.indexOf('hash') > -1 || name.indexOf('captcha') > -1 || name.indexOf('clicaptcha') > -1) {
+                    seccodeFields[name] = allHidden[i].value.substring(0, 60);
                 }
             }
+            info.seccode_fields = JSON.stringify(seccodeFields);
+            // 检查 tncode_div 可见性
+            var div = document.getElementById('tncode_div');
+            if (div) {
+                var style = window.getComputedStyle(div);
+                info.tncode_div_display = style.display;
+                info.tncode_div_visibility = style.visibility;
+            }
+            return JSON.stringify(info);
+            ''')
+            logger.info(f"🔍 验证状态诊断: {diag}")
+        except Exception as e:
+            logger.debug(f"诊断异常: {e}")
 
-            // 转换为图像坐标（tncode内部使用img_w-mark_w作为maxOffset）
-            var scale = t._img_w / bgCanvas.width;
-            var imageX = Math.round(bestX * scale);
+    def _find_tncode_gap(self):
+        """将背景canvas与完整图（sprite第3行）对比，精确定位缺口位置"""
+        compare_js = '''
+        var t = window.tncode;
+        var bgCanvas = document.querySelector('.tncode_canvas_bg');
+        if (!bgCanvas || bgCanvas.width === 0) return -1;
 
-            // 确保在有效范围内 [0, img_w-mark_w]
-            var maxOffset = t._img_w - t._mark_w;
-            if (imageX < 0) imageX = 0;
-            if (imageX > maxOffset) imageX = maxOffset;
+        var img = (t && t._img) || document.querySelector('.tncode_div img');
+        if (!img || !img.complete || img.naturalWidth === 0) return -3;
 
-            return imageX;
-        })()
+        var imgW = (t && t._img_w) || 240;
+        var imgH = (t && t._img_h) || 150;
+        var markW = (t && t._mark_w) || 50;
+        var maxOffset = imgW - markW;
+
+        // 确保 bg 已绘制（_draw_bg 以自然尺寸 imgW×imgH 绘制，而非 canvas 尺寸）
+        if (t && t._draw_bg && !t._is_draw_bg) {
+            try { t._draw_bg(); } catch(e) {}
+        }
+
+        // bg 画布只有前 imgW 像素有内容（_draw_bg 使用自然尺寸）
+        // 因此比对时也必须使用 imgW 宽度的像素数据，否则右侧空白区域会产生误检
+        var tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = imgW;
+        tmpCanvas.height = imgH;
+        var tmpCtx = tmpCanvas.getContext('2d');
+        try {
+            tmpCtx.drawImage(img, 0, imgH * 2, imgW, imgH, 0, 0, imgW, imgH);
+        } catch(e) {
+            return -4;
+        }
+
+        var bgData = bgCanvas.getContext('2d').getImageData(0, 0, imgW, imgH);
+        var fullData = tmpCtx.getImageData(0, 0, imgW, imgH);
+
+        var threshold = 30;
+        var scale = 1.0;  // 都在自然尺寸下比对，无需缩放
+        var markW_px = markW;
+
+        var diffCounts = new Array(imgW).fill(0);
+        var checkRows = [25, 40, 55, 70, 85, 100, 115, 130];
+        for (var ri = 0; ri < checkRows.length; ri++) {
+            var y = checkRows[ri];
+            for (var x = 0; x < imgW; x++) {
+                var idx = (y * imgW + x) * 4;
+                var dr = Math.abs(bgData.data[idx] - fullData.data[idx]);
+                var dg = Math.abs(bgData.data[idx+1] - fullData.data[idx+1]);
+                var db = Math.abs(bgData.data[idx+2] - fullData.data[idx+2]);
+                if (dr + dg + db > threshold) {
+                    diffCounts[x]++;
+                }
+            }
+        }
+
+        // 滑动窗口找到缺口区域
+        var bestX = -1, bestSum = 0;
+        for (var x = 0; x <= maxOffset; x++) {
+            var sum = 0;
+            for (var w = 0; w < markW_px; w++) {
+                sum += diffCounts[x + w];
+            }
+            if (sum > bestSum) {
+                bestSum = sum;
+                bestX = x;
+            }
+        }
+
+        var minDiffRequired = checkRows.length * markW_px * 0.2;
+        if (bestSum < minDiffRequired) return -5;
+
+        // bestX 已是图像像素坐标，直接作为 _mark_offset 使用
+        // （tncode._block_on_move 中 _mark_offset = dx，dx 为屏幕像素位移，
+        //   但 maxDx = imgW - markW 混合了单位，实际 _mark_offset = dx 屏幕像素 ≈ 图像偏移量）
+        var imageX = bestX;
+        if (imageX < 0) imageX = 0;
+        if (imageX > maxOffset) imageX = maxOffset;
+        return imageX;
         '''
         try:
-            gap = self.browser.run_js(js_code)
-            if gap and gap > 5:
-                logger.info(f"🎯 Canvas分析: 缺口位置 = {gap}px (max=190)")
+            gap = self.browser.run_js(compare_js)
+            if gap == -1:
+                logger.info("比对分析: 未找到背景canvas")
+            elif gap == -2:
+                logger.info("比对分析: 背景canvas为空白")
+            elif gap == -3:
+                logger.info("比对分析: 未找到tncode图片元素或图片未加载")
+            elif gap == -4:
+                logger.info("比对分析: drawImage失败（图片元素不可用于绘制）")
+            elif gap == -5:
+                logger.info(f"比对分析: 未找到足够的差异区域 (bestSum不足)")
+            elif gap is not None and gap > 5:
+                logger.info(f"🎯 比对分析: 缺口位置 = {gap}px (max=190)")
                 return int(gap)
+            else:
+                logger.info(f"比对分析返回: {gap}")
             return -1
         except Exception as e:
-            logger.debug(f"缺口检测失败: {e}")
+            logger.info(f"比对分析异常: {e}")
             return -1
 
     def _try_tncode_drag(self, distance):
-        """使用 tncode 原生事件处理器模拟拖动 — 最可靠的方式"""
+        """
+        纯 JS 拖动：直接调用 tncode 原生函数 + MouseEvent。
+        使用 JS busy-loop 确保精确的时间控制（服务器只看轨迹数据，不感知JS线程状态）。
+        """
+        logger.info(f"🖱️ _try_tncode_drag: image_gap={distance}")
         try:
-            js_code = '''
-            (function() {
-                var t = window.tncode;
-                var slider = document.querySelector('.slide_block');
-                if (!t || !slider) return 'no_handler';
+            import random as _rnd
 
-                var distance = arguments[0];
+            # 预生成轨迹参数（Python 随机，避免 JS Math.random 的模式）
+            total_time = _rnd.randint(1200, 2200)
+            target_points = _rnd.randint(25, 40)
+            y_variance = _rnd.randint(5, 10)
 
-                // 如果上次拖动还在进行，先结束
-                if (t._doing) {
-                    t._block_on_end({preventDefault: function(){}, clientX: 0, clientY: 0});
-                }
+            js_code = f'''
+            var IMAGE_GAP = {distance};
+            var SCREEN_DIST = IMAGE_GAP;
+            var TOTAL_TIME = {total_time};
+            var TARGET_POINTS = {target_points};
+            var Y_VARIANCE = {y_variance};
 
-                // 重置验证码状态
-                if (typeof t._reset === 'function') {
-                    t._reset();
-                }
+            var t = window.tncode;
+            var slider = document.querySelector('.slide_block');
+            if (!t || !slider) return 'no_handler';
 
-                var rect = slider.getBoundingClientRect();
-                var startX = Math.round(rect.left + rect.width / 2);
-                var startY = Math.round(rect.top + rect.height / 2);
+            try {{ t._reset(); }} catch(e) {{}}
 
-                // 创建假事件对象
-                function makeEvent(x, y) {
-                    return {preventDefault: function(){}, clientX: x, clientY: y, touches: null};
-                }
+            var rect = slider.getBoundingClientRect();
+            var startX = Math.round(rect.left + rect.width / 2);
+            var startY = Math.round(rect.top + rect.height / 2);
 
-                // 开始拖动
-                t._block_start_move(makeEvent(startX, startY));
+            function makeME(type, x, y, isUp) {{
+                return new MouseEvent(type, {{
+                    bubbles: true, cancelable: true,
+                    clientX: x, clientY: y,
+                    button: 0, buttons: isUp ? 0 : 1
+                }});
+            }}
 
-                // 模拟自然拖动轨迹（使用缓动函数 + 随机抖动）
-                var steps = 10 + Math.floor(Math.random() * 6);
-                var prevX = 0;
-                for (var i = 1; i <= steps; i++) {
-                    var progress = i / steps;
-                    // easeOutCubic
-                    var eased = 1 - Math.pow(1 - progress, 3);
-                    var currentDist = Math.round(distance * eased);
-                    // 确保单调递增
-                    if (currentDist <= prevX) currentDist = prevX + 1;
-                    if (currentDist > distance) currentDist = distance;
-                    prevX = currentDist;
+            function rnd(min, max) {{
+                return min + Math.floor(Math.random() * (max - min + 1));
+            }}
 
-                    var currentX = startX + currentDist;
-                    var currentY = startY + (Math.random() - 0.5) * 3;
-                    t._block_on_move(makeEvent(currentX, currentY));
-                }
+            // 生成轨迹时间序列
+            var steps = TARGET_POINTS;
+            var times = new Array(steps);
+            var base = TOTAL_TIME / steps;
+            for (var i = 0; i < steps; i++) {{
+                var t_step = base + rnd(-15, 15);
+                if (Math.random() < 0.05) t_step += rnd(20, 60);
+                if (Math.random() < 0.03) t_step += rnd(40, 100);
+                times[i] = Math.max(2, Math.round(t_step));
+            }}
 
-                // 确保最终位置精确
-                if (prevX < distance) {
-                    t._block_on_move(makeEvent(startX + distance, startY));
-                }
+            // 生成轨迹位置序列（带 Y 抖动）
+            var xs = new Array(steps);
+            for (var i = 0; i < steps; i++) {{
+                var frac = (i + 1) / steps;
+                // 加速-减速曲线
+                var eased;
+                if (frac < 0.3) {{
+                    eased = 0.5 * Math.pow(frac / 0.3, 2);
+                }} else if (frac < 0.8) {{
+                    eased = 0.5 + 0.5 * ((frac - 0.3) / 0.5);
+                }} else {{
+                    eased = 1 - 0.5 * Math.pow((1 - frac) / 0.2, 2);
+                }}
+                xs[i] = Math.round(eased * SCREEN_DIST);
+            }}
 
-                // 结束拖动 — 这会触发 _send_result
-                t._block_on_end(makeEvent(startX + distance, startY));
+            // === 1. 开始拖动 ===
+            t._block_start_move(makeME('mousedown', startX, startY, false));
 
-                return 'ok';
-            })()
+            // === 2. 执行轨迹 ===
+            var startMs = Date.now();
+            var cumulative = 0;
+            for (var i = 0; i < steps; i++) {{
+                cumulative += times[i];
+                var target = startMs + cumulative;
+                var wait = target - Date.now();
+                if (wait > 0) {{
+                    var endWait = Date.now() + wait;
+                    while (Date.now() < endWait) {{}}
+                }}
+
+                var x = startX + xs[i];
+                var y = startY + Math.round((Math.random() - 0.5) * Y_VARIANCE * 2);
+                // 偶尔的垂直抖动
+                if (Math.random() < 0.08) {{
+                    y += Math.round((Math.random() - 0.5) * Y_VARIANCE * 4);
+                }}
+                t._block_on_move(makeME('mousemove', x, y, false));
+            }}
+
+            // === 3. 超调回退 ===
+            var wait = rnd(30, 60);
+            var endWait = Date.now() + wait;
+            while (Date.now() < endWait) {{}}
+            var overshoot = rnd(1, 4);
+            t._block_on_move(makeME('mousemove', startX + SCREEN_DIST + overshoot, startY, false));
+            wait = rnd(35, 65);
+            endWait = Date.now() + wait;
+            while (Date.now() < endWait) {{}}
+            t._block_on_move(makeME('mousemove', startX + SCREEN_DIST, startY, false));
+
+            // === 4. 释放前停顿 ===
+            wait = rnd(40, 80);
+            endWait = Date.now() + wait;
+            while (Date.now() < endWait) {{}}
+
+            // === 5. 释放 ===
+            t._block_on_end(makeME('mouseup', startX + SCREEN_DIST, startY, true));
+
+            var trackLen = t._track_data ? t._track_data.length : 0;
+            var totalT = (trackLen > 0 && t._track_data) ? t._track_data[trackLen-1].t : 0;
+
+            return 'ok: img_gap=' + IMAGE_GAP + ' scr_dist=' + SCREEN_DIST +
+                   ' track=' + trackLen + ' time=' + totalT + 'ms offset=' + t._mark_offset;
             '''
-            result = self.browser.run_js(js_code, distance)
-            if result == 'no_handler':
-                logger.debug("tncode原生拖动: 未找到处理器")
+            result = self.browser.run_js(js_code)
+            logger.info(f"🖱️ _try_tncode_drag 结果: {result}")
+            if isinstance(result, str) and result.startswith('err:'):
+                logger.warning(f"tncode拖动错误: {result}")
                 return False
-            return True
+            if result == 'no_handler':
+                logger.warning("tncode拖动: 未找到处理器")
+                return False
+            return bool(result) and str(result).startswith('ok')
         except Exception as e:
-            logger.debug(f"tncode原生拖动失败: {e}")
+            logger.debug(f"tncode拖动失败: {e}")
             return False
 
-    def _wait_for_tncode_result(self, timeout=5):
+    def _wait_for_tncode_result(self, timeout=6):
         """轮询等待 tncode 验证结果（不阻塞 JS 主线程）"""
         check_js = '''
-        (function() {
-            var t = window.tncode;
-            if (!t) return 'no_tncode';
-            if (t._result === true) return 'pass';
-            // 拖动已完成且已发送请求（_doing=false, _result=false, 有track数据）
-            if (t._doing === false && t._track_data && t._track_data.length > 1) return 'done';
-            return 'wait';
-        })()
+        var t = window.tncode;
+        if (!t) return 'no_tncode';
+        if (t._result === true) return 'pass';
+        // 检查 clicaptcha token 是否已包含 _ok
+        var infoInput = document.getElementById('clicaptcha-submit-info');
+        if (infoInput && infoInput.value && infoInput.value.indexOf('_ok') > -1) return 'pass';
+        if (t._doing === true) return 'dragging';
+        if (t._doing === false && t._track_data && t._track_data.length > 1) return 'sent';
+        return 'wait';
         '''
         start = time.time()
+        sent_time = None
         while time.time() - start < timeout:
             try:
                 result = self.browser.run_js(check_js)
-                if result == 'pass':
+                if result in ('pass',):
                     return True
-                if result == 'done':
-                    # 请求完成但未通过，可以重试
-                    return 'retry'
-                # 'wait' → 还在进行中，继续等待
+                if result == 'sent':
+                    # 拖动已完成，请求已发送，记录时间并继续等待服务器响应
+                    if sent_time is None:
+                        sent_time = time.time()
+                    elif time.time() - sent_time > 2.5:
+                        # 等待 2.5 秒后仍无响应，判定失败
+                        return 'retry'
+                # 'dragging' / 'wait' → 继续等待
             except:
                 pass
             time.sleep(0.3)
         # 超时，最后检查一次
         try:
-            final = self.browser.run_js('return window.tncode && window.tncode._result')
+            final = self.browser.run_js('''
+            var t = window.tncode;
+            if (t && t._result === true) return true;
+            var inp = document.getElementById('clicaptcha-submit-info');
+            if (inp && inp.value && inp.value.indexOf('_ok') > -1) return true;
+            return false;
+            ''')
             return bool(final)
         except:
             return False
@@ -1056,22 +1193,20 @@ class LaowangBrowserSign:
         """刷新 tncode 验证码"""
         try:
             result = self.browser.run_js('''
-            (function() {
-                var t = window.tncode;
-                if (t && typeof t.refresh === 'function') {
-                    t.refresh();
-                    return true;
-                }
-                var btn = document.querySelector('.tncode_refresh, .tncode-refresh, [class*="refresh"]');
-                if (btn) { btn.click(); return true; }
-                return false;
-            })()
+            var t = window.tncode;
+            if (t && typeof t.refresh === 'function') {
+                t.refresh();
+                return true;
+            }
+            var btn = document.querySelector('.tncode_refresh');
+            if (btn) { btn.click(); return true; }
+            return false;
             ''')
             if result:
                 time.sleep(1.5)
                 return True
         except Exception as e:
-            logger.debug(f"刷新tncode失败: {e}")
+            logger.info(f"刷新tncode失败: {e}")
         return False
 
     def pass_slide_verification(self):
@@ -1103,6 +1238,24 @@ class LaowangBrowserSign:
 
             logger.info(f"🔄 第 {attempt+1}/{max_attempts} 次尝试...")
 
+            # 等待 tncode 图片加载完成
+            if attempt == 0:
+                img_ready = False
+                for w in range(10):
+                    ready = self.browser.run_js('''
+                    var t = window.tncode;
+                    var img = document.querySelector('.tncode_div img');
+                    return !!(t && t._img_loaded && img && img.complete && img.naturalWidth > 0);
+                    ''')
+                    if ready:
+                        img_ready = True
+                        break
+                    time.sleep(0.5)
+                if not img_ready:
+                    logger.info("⏳ 图片加载超时，尝试刷新...")
+                    self._refresh_tncode()
+                    time.sleep(1)
+
             # 方法1: Canvas分析获取精确缺口位置
             gap = self._find_tncode_gap()
             if gap > 5:
@@ -1112,6 +1265,8 @@ class LaowangBrowserSign:
                     result = self._wait_for_tncode_result(timeout=4)
                     if result is True:
                         logger.info("✅ 滑块验证通过！(Canvas精确)")
+                        # 诊断：检查验证状态是否真正反映到表单
+                        self._diagnose_verification_state()
                         return True
                     elif result == 'retry':
                         logger.info("⚠️ 验证未通过，刷新重试...")
@@ -1121,7 +1276,7 @@ class LaowangBrowserSign:
             # 方法2: 如果Canvas分析失败，尝试几个常见距离
             if gap <= 5:
                 logger.info("⚠️ Canvas分析失败，尝试常见距离...")
-                for dist in [180, 170, 160, 150, 140, 130, 190, 120, 110, 100]:
+                for dist in [60, 90, 120, 80, 110, 150]:
                     if self._try_tncode_drag(dist):
                         time.sleep(1)
                         result = self._wait_for_tncode_result(timeout=3)
@@ -1183,7 +1338,7 @@ class LaowangBrowserSign:
                             if text_span and '点击' in text_span.text:
                                 logger.info("🖱️ 点击触发滑块验证...")
                                 tncode.click()
-                                time.sleep(0.5)
+                                time.sleep(2)
 
                             if not self.pass_slide_verification():
                                 logger.warning("⚠️ 滑块验证破解未成功，重试登录流程...")
@@ -1194,17 +1349,52 @@ class LaowangBrowserSign:
                         has_captcha = False
                         logger.debug(f"未找到 tncode 验证码: {e}")
 
-                    # 点击登录
+                    # 提交登录 — 先 JS 直接提交表单
                     logger.info("🔑 正在提交登录...")
-                    self.browser.ele('@name=loginsubmit').click()
+                    login_result = self.browser.run_js('''
+                    var infoInput = document.getElementById("clicaptcha-submit-info");
+                    var loginForm = document.querySelector("form[name='login']");
+                    if (!loginForm) return 'no_form';
+                    if (infoInput && !loginForm.contains(infoInput)) {
+                        loginForm.appendChild(infoInput);
+                    }
+                    // 直接提交表单（触发完整的表单提交流程）
+                    loginForm.submit();
+                    return 'form_submitted';
+                    ''')
+                    logger.debug(f"登录提交结果: {login_result}")
 
                     # 等待跳转或页面更新
-                    time.sleep(3)
+                    time.sleep(4)
 
-                    # 验证登录成功
+                    # 验证登录成功（多种检测方式）
                     current_html = self.browser.html
+                    current_url = self.browser.url
                     if 'member.php?mod=logging&action=logout' in current_html:
-                        break  # 登录成功！
+                        logger.info("✅ 检测到 logout 链接，登录成功")
+                        break
+                    if 'succeedmessage' in current_html or '欢迎您回来' in current_html:
+                        logger.info("✅ 检测到登录成功消息")
+                        time.sleep(2)
+                        break
+                    # 已不再停留在登录页 → 登录成功
+                    if 'member.php?mod=logging' not in current_url:
+                        logger.info(f"✅ 已跳转离开登录页: {current_url[:60]}")
+                        break
+
+                    # 诊断登录失败
+                    login_diag = self.browser.run_js('''
+                    var errors = {};
+                    var e = document.querySelector(".pc_inner, .loginf, [class*='error'], [class*='alert'], [id*='error'], [id*='notice']");
+                    if (e) errors.page_msg = e.innerText ? e.innerText.substring(0, 200) : e.textContent.substring(0, 200);
+                    var form = document.querySelector("form[name='login']");
+                    if (form) {
+                        errors.form_action = form.action;
+                        errors.form_method = form.method;
+                    }
+                    return JSON.stringify(errors);
+                    ''')
+                    logger.info(f"🔍 登录失败诊断: {login_diag}")
 
                     # 登录失败，检查原因
                     current_url = self.browser.url
@@ -1222,13 +1412,34 @@ class LaowangBrowserSign:
 
                 except Exception as e:
                     logger.error(f"登录流程异常: {e}")
+                    # 如果找不到用户名输入框，可能已登录
+                    if '没有找到元素' in str(e) or '@name=username' in str(e):
+                        current_url = self.browser.url if self.browser else ''
+                        current_html = self.browser.html if self.browser else ''
+                        # 不在登录页、已在首页/论坛 → 已登录
+                        if 'member.php?mod=logging' not in current_url:
+                            logger.info(f"✅ 已处于登录状态（当前URL: {current_url[:60]}）")
+                            break
+                        if '退出' in current_html or '我的' in current_html or '个人中心' in current_html:
+                            logger.info("✅ 已处于登录状态（页面显示已登录信息）")
+                            break
                     if login_try < login_attempts - 1:
                         continue
                     return False, f"❌ {self.username}: 浏览器操作失败: {e}"
 
             # 确认登录成功后再进行后续操作
             current_html = self.browser.html
-            if 'member.php?mod=logging&action=logout' not in current_html:
+            current_url = self.browser.url
+            logged_in = (
+                'member.php?mod=logging&action=logout' in current_html or
+                '退出' in current_html or
+                '我的' in current_html or
+                ('member.php?mod=logging' not in current_url and 'laowang.vip' in current_url) or
+                '欢迎您回来' in current_html or
+                '签到' in current_html  # 签到按钮说明已登录
+            )
+            if not logged_in:
+                logger.warning(f"未检测到登录状态，URL={current_url[:60]}")
                 return False, f"❌ {self.username}: 登录失败（{login_attempts}次尝试后仍失败）"
 
             # 提取用户名
