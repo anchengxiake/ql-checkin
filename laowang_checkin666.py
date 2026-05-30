@@ -1462,18 +1462,54 @@ class LaowangBrowserSign:
             # 访问签到页面
             logger.info("📝 正在访问签到页面...")
             self.browser.get(SIGN_PAGE_URL)
-            time.sleep(2)
+            time.sleep(3)
+
+            # 检查是否还在登录状态（签到页面可能要求重新登录）
+            current_html = self.browser.html
+            current_url = self.browser.url
+            if 'member.php?mod=logging' in current_url:
+                logger.warning("⚠️ 访问签到页面后被重定向到登录页，尝试重新登录...")
+                # 重新输入账号密码并登录
+                try:
+                    self.browser.run_js(f'''
+                    var u = document.querySelector("input[name=username]");
+                    var p = document.querySelector("input[name=password]");
+                    if (u) u.value = "{self.username}";
+                    if (p) p.value = "{self.password}";
+                    ''')
+                    time.sleep(1)
+                    # 触发 tncode
+                    self.browser.run_js('var t = document.querySelector("#tncode"); if(t) t.click();')
+                    time.sleep(2)
+                    # 尝试破解 tncode
+                    self.pass_slide_verification()
+                    time.sleep(1)
+                    # 提交登录
+                    self.browser.run_js('''
+                    var f = document.querySelector("form[name=login]");
+                    if (f) f.submit();
+                    ''')
+                    time.sleep(4)
+                    # 再次访问签到页面
+                    self.browser.get(SIGN_PAGE_URL)
+                    time.sleep(3)
+                    current_html = self.browser.html
+                except Exception as e:
+                    logger.error(f"重新登录失败: {e}")
 
             # 检查是否已签到
             page_html = self.browser.html
             if any(x in page_html for x in ['今日已签', 'btnvisted', '已签到']):
                 return True, f"✅ {self.display_name} 今日已签到"
 
-            # 点击签到按钮
+            # 点击签到按钮（DrissionPage ele() 无法匹配复合类名，用 JS 直接点击）
             try:
-                sign_btn = self.browser.ele('.btn.J_chkitot, .J_chkitot, [class*="chkitot"]', timeout=5)
-                if sign_btn:
-                    sign_btn.click()
+                clicked = self.browser.run_js('''
+                var btn = document.querySelector('.btn.J_chkitot') || document.querySelector('[class*="chkitot"]');
+                if (btn) { btn.click(); return true; }
+                return false;
+                ''')
+                if clicked:
                     time.sleep(2)
 
                     # 检查是否需要再次滑块验证
@@ -1484,12 +1520,28 @@ class LaowangBrowserSign:
                             logger.info("🤖 签到需要滑块验证，开始破解...")
                             if not self.pass_slide_verification():
                                 return False, f"❌ {self.display_name}: 签到滑块验证失败"
+
+                            # 验证通过后，点击提交按钮
+                            time.sleep(1)
+                            try:
+                                submit_btn = self.browser.ele('#submit-btn', timeout=2)
+                                if submit_btn:
+                                    logger.info("📤 点击提交按钮...")
+                                    submit_btn.click()
+                                    time.sleep(2)
+                            except:
+                                pass
                     except:
                         pass
 
                     # 检查签到结果
                     time.sleep(2)
                     result_html = self.browser.html
+                    result_url = self.browser.url
+                    logger.info(f"签到结果页面 URL: {result_url[:80]}")
+                    # 检查页面内容中的关键信息
+                    result_text = self.browser.run_js('return document.body ? document.body.innerText.substring(0, 500) : "";')
+                    logger.info(f"签到结果页面内容: {result_text[:200]}")
                     if any(x in result_html for x in ['今日已签', 'btnvisted', '已签到', '签到成功']):
                         return True, f"✅ {self.display_name} 签到成功"
 
@@ -1497,7 +1549,7 @@ class LaowangBrowserSign:
                     logger.warning(f"签到按钮已点击但未检测到成功标志，URL: {self.browser.url[:80]}")
                     return False, f"❌ {self.display_name}: 签到结果不明确，请检查日志"
                 else:
-                    return False, f"❌ {self.display_name}: 未找到签到按钮"
+                    return False, f"❌ {self.display_name}: 未找到签到按钮（JS点击失败）"
 
             except Exception as e:
                 return False, f"❌ {self.display_name}: 签到操作失败: {e}"
