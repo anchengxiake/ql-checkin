@@ -275,91 +275,161 @@ class LaowangSigner:
         return -1
 
     def _drag_slider(self, distance):
-        """模拟滑块拖动（物理运动轨迹）"""
+        """模拟滑块拖动 - 使用 DrissionPage Actions（CDP 可信事件）"""
         import random as _rnd
 
-        # 添加随机偏移，避免每次精确命中同一位置
+        # 添加随机偏移
         offset = _rnd.randint(-3, 3)
         adjusted_dist = max(10, distance + offset)
-        mid_ratio = _rnd.uniform(0.55, 0.75)
-        y_variance = _rnd.randint(5, 10)
-
-        js_code = f'''
-        var DIST = {adjusted_dist};
-        var t = window.tncode;
-        var slider = document.querySelector('.slide_block');
-        if (!t || !slider) return 'no_handler';
-
-        try {{ t._reset(); }} catch(e) {{}}
-
-        var rect = slider.getBoundingClientRect();
-        var startX = Math.round(rect.left + rect.width / 2);
-        var startY = Math.round(rect.top + rect.height / 2);
-
-        function makeME(type, x, y, isUp) {{
-            return new MouseEvent(type, {{
-                bubbles: true, cancelable: true,
-                clientX: x, clientY: y,
-                button: 0, buttons: isUp ? 0 : 1
-            }});
-        }}
-
-        // 物理运动轨迹（加速-减速-微调）
-        var points = [];
-        var mid = DIST * {mid_ratio};
-        var sum = 0, v = 0, dt = 0.03;
-        while (sum < DIST) {{
-            var a = sum < mid ? (2.5 + Math.random()) : -(2.0 + Math.random());
-            var s = v * dt + 0.5 * a * dt * dt;
-            v = v + a * dt;
-            sum += s;
-            if (sum > DIST) sum = DIST;
-            points.push(Math.round(sum));
-        }}
-        if (points.length > 0) points[points.length - 1] = DIST;
-
-        // 开始拖动
-        t._block_start_move(makeME('mousedown', startX, startY, false));
-
-        // 执行轨迹（用 setTimeout 替代 busy-wait）
-        var i = 0;
-        function doStep() {{
-            if (i >= points.length) {{
-                // 超调回退
-                setTimeout(function() {{
-                    t._block_on_move(makeME('mousemove', startX + DIST + 2, startY, false));
-                    setTimeout(function() {{
-                        t._block_on_move(makeME('mousemove', startX + DIST, startY, false));
-                        // 释放前停顿
-                        setTimeout(function() {{
-                            t._block_on_end(makeME('mouseup', startX + DIST, startY, true));
-                        }}, 40 + Math.floor(Math.random() * 40));
-                    }}, 30 + Math.floor(Math.random() * 30));
-                }}, 30 + Math.floor(Math.random() * 30));
-                return;
-            }}
-            var x = startX + points[i];
-            var y = startY + Math.round((Math.random() - 0.5) * {y_variance} * 2);
-            t._block_on_move(makeME('mousemove', x, y, false));
-            i++;
-            setTimeout(doStep, 2 + Math.floor(Math.random() * 8));
-        }}
-        doStep();
-        'async_started';
-        '''
 
         try:
-            result = self.browser.run_js(js_code)
-            if result and str(result).startswith('async_started'):
-                # 等待异步拖动完成
-                time.sleep(3)
-                # 检查拖动结果
-                mark_offset = self.browser.run_js('return window.tncode ? window.tncode._mark_offset : null;')
-                logger.debug(f"滑块偏移: {mark_offset}")
-                return True
-            return False
+            # 重置 tncode 状态
+            self.browser.run_js('try { window.tncode._reset(); } catch(e) {}')
+            time.sleep(0.3)
+
+            # 获取滑块元素
+            slider = self.browser.ele('.slide_block', timeout=3)
+            if not slider:
+                logger.debug("找不到滑块元素")
+                return False
+
+            # 使用 DrissionPage Actions（内部调用 CDP Input.dispatchMouseEvent，isTrusted=true）
+            from DrissionPage.common import Actions
+            actions = Actions(self.browser)
+
+            # 物理拖动：hold → 分段 move → release
+            # 先移到滑块上
+            actions.move_to(slider, duration=0.3)
+            time.sleep(0.1)
+
+            # 按下
+            actions.hold()
+            time.sleep(0.15)
+
+            # 分段拖动（模拟真人加速-减速）
+            moved = 0
+            mid = adjusted_dist * _rnd.uniform(0.55, 0.75)
+            step_size = max(3, adjusted_dist // 20)
+
+            while moved < adjusted_dist:
+                remaining = adjusted_dist - moved
+                if moved < mid:
+                    # 加速阶段
+                    step = min(step_size + _rnd.randint(0, 5), remaining)
+                else:
+                    # 减速阶段
+                    step = max(2, step_size - _rnd.randint(0, 3))
+                    step = min(step, remaining)
+
+                if step <= 0:
+                    break
+
+                # 添加 Y 轴微小偏移
+                y_offset = _rnd.randint(-3, 3)
+                actions.move(step, y_offset, duration=_rnd.uniform(0.02, 0.06))
+                moved += step
+
+            # 超调回退
+            time.sleep(_rnd.uniform(0.05, 0.1))
+            actions.move(3, 0, duration=0.05)
+            time.sleep(_rnd.uniform(0.05, 0.08))
+            actions.move(-3, 0, duration=0.05)
+
+            # 释放前停顿
+            time.sleep(_rnd.uniform(0.08, 0.15))
+
+            # 释放
+            actions.release()
+            time.sleep(0.5)
+
+            # 调试信息
+            debug_info = self.browser.run_js('''
+            var t = window.tncode;
+            if (!t) return 'no_tncode';
+            return JSON.stringify({
+                mark_offset: t._mark_offset,
+                block_x: t._block_x,
+                result: t._result,
+                img_w: t._img_w,
+                mark_w: t._mark_w
+            });
+            ''')
+            logger.debug(f"拖动调试: {debug_info}")
+            return True
+
         except Exception as e:
-            logger.debug(f"拖动失败: {e}")
+            logger.debug(f"Actions 拖动失败: {e}")
+            # 回退：直接 CDP 调用
+            return self._drag_with_cdp_fallback(distance)
+
+    def _drag_with_cdp_fallback(self, distance):
+        """回退方案：直接调用 CDP Input.dispatchMouseEvent"""
+        import random as _rnd
+
+        try:
+            self.browser.run_js('try { window.tncode._reset(); } catch(e) {}')
+            time.sleep(0.3)
+
+            slider = self.browser.ele('.slide_block', timeout=3)
+            if not slider:
+                return False
+
+            rect = slider.rect
+            startX = round(rect.midpoint[0])
+            startY = round(rect.midpoint[1])
+
+            # mousedown
+            self.browser.run_cdp('Input.dispatchMouseEvent',
+                                 type='mousePressed', x=startX, y=startY,
+                                 button='left', clickCount=1)
+            time.sleep(0.1)
+
+            # 分段 mousemove
+            moved = 0
+            mid = distance * _rnd.uniform(0.55, 0.75)
+            step = max(3, distance // 20)
+
+            while moved < distance:
+                remaining = distance - moved
+                if moved < mid:
+                    s = min(step + _rnd.randint(0, 5), remaining)
+                else:
+                    s = max(2, step - _rnd.randint(0, 3))
+                    s = min(s, remaining)
+                if s <= 0:
+                    break
+                moved += s
+                x = startX + moved
+                y = startY + _rnd.randint(-3, 3)
+                self.browser.run_cdp('Input.dispatchMouseEvent',
+                                     type='mouseMoved', x=x, y=y, button='left')
+                time.sleep(_rnd.uniform(0.02, 0.06))
+
+            # 超调回退
+            time.sleep(0.05)
+            self.browser.run_cdp('Input.dispatchMouseEvent',
+                                 type='mouseMoved', x=startX + distance + 3, y=startY, button='left')
+            time.sleep(0.05)
+            self.browser.run_cdp('Input.dispatchMouseEvent',
+                                 type='mouseMoved', x=startX + distance, y=startY, button='left')
+            time.sleep(0.1)
+
+            # mouseup
+            self.browser.run_cdp('Input.dispatchMouseEvent',
+                                 type='mouseReleased', x=startX + distance, y=startY,
+                                 button='left', clickCount=1)
+            time.sleep(0.5)
+
+            debug_info = self.browser.run_js('''
+            var t = window.tncode;
+            if (!t) return 'no_tncode';
+            return JSON.stringify({mark_offset: t._mark_offset, block_x: t._block_x, result: t._result});
+            ''')
+            logger.debug(f"CDP 回退拖动调试: {debug_info}")
+            return True
+
+        except Exception as e:
+            logger.debug(f"CDP 回退拖动失败: {e}")
             return False
 
     def _check_passed(self):
@@ -393,7 +463,7 @@ class LaowangSigner:
 
         # 等待滑块出现
         time.sleep(2)
-        for _ in range(5):
+        for _ in range(10):
             try:
                 self.browser.ele('.slide_block', timeout=1)
                 break
@@ -408,34 +478,46 @@ class LaowangSigner:
 
             logger.info(f"🔄 尝试 {attempt + 1}/5")
 
-            # 等待图片加载
-            for _ in range(10):
+            # 等待图片加载（更长超时）
+            for _ in range(20):
                 ready = self.browser.run_js('''
                 var t = window.tncode;
                 var img = document.querySelector('.tncode_div img');
-                return !!(t && t._img_loaded && img && img.complete && img.naturalWidth > 0);
+                var bgCanvas = document.querySelector('.tncode_canvas_bg');
+                return !!(t && t._img_loaded && img && img.complete && img.naturalWidth > 0
+                         && bgCanvas && bgCanvas.width > 0 && bgCanvas.height > 0);
                 ''')
                 if ready:
                     break
                 time.sleep(0.5)
 
+            # 额外等待确保渲染完成
+            time.sleep(0.5)
+
             # 识别缺口
             gap = self._find_tncode_gap()
             if gap > 5:
+                logger.info(f"📐 缺口位置: {gap}px, 开始拖动...")
                 # 拖动
                 if self._drag_slider(gap):
-                    time.sleep(1.5)
-                    if self._check_passed():
-                        logger.info("✅ 滑块验证通过！")
-                        return True
+                    # 轮询等待验证结果（tncode 验证是异步的）
+                    for _ in range(10):
+                        time.sleep(0.5)
+                        if self._check_passed():
+                            logger.info("✅ 滑块验证通过！")
+                            return True
+                    logger.debug("拖动后验证未通过，准备重试")
+            else:
+                logger.debug(f"缺口识别失败: {gap}")
 
             # 刷新验证码
             try:
                 self.browser.run_js('''
                 var t = window.tncode;
                 if (t && typeof t.refresh === 'function') t.refresh();
+                else if (t && typeof t._reset === 'function') t._reset();
                 ''')
-                time.sleep(1.5)
+                time.sleep(2)
             except:
                 pass
 
