@@ -89,6 +89,27 @@ class LaowangSigner:
             logger.error(f"❌ 浏览器启动失败: {e}")
             return False
 
+    def _get_sprite_info(self):
+        """获取精灵图尺寸信息"""
+        try:
+            info = self.browser.run_js('''
+            var t = window.tncode;
+            var img = (t && t._img) || document.querySelector('.tncode_div img');
+            if (!img || !img.complete) return null;
+            return JSON.stringify({
+                naturalW: img.naturalWidth,
+                naturalH: img.naturalHeight,
+                imgW: (t && t._img_w) || 240,
+                imgH: (t && t._img_h) || 150
+            });
+            ''')
+            if isinstance(info, str):
+                import json
+                return json.loads(info)
+            return info
+        except:
+            return None
+
     def _find_tncode_gap(self):
         """
         识别滑块缺口位置
@@ -99,40 +120,46 @@ class LaowangSigner:
             try:
                 import base64
                 import json
+                import tempfile
+                import os
 
-                img_data = self.browser.run_js('''
-                var t = window.tncode;
-                var result = {bg: null, fg: null};
-
-                try {
-                    var bgCanvas = document.querySelector('.tncode_canvas_bg');
-                    if (bgCanvas) {
-                        result.bg = bgCanvas.toDataURL('image/png').split(',')[1];
-                    }
-
-                    var img = (t && t._img) || document.querySelector('.tncode_div img');
-                    if (img && img.complete && img.naturalWidth > 0) {
-                        var tmpCanvas = document.createElement('canvas');
-                        var imgW = (t && t._img_w) || 240;
-                        var imgH = (t && t._img_h) || 150;
-                        tmpCanvas.width = imgW;
-                        tmpCanvas.height = imgH;
-                        var ctx = tmpCanvas.getContext('2d');
-                        ctx.drawImage(img, 0, imgH * 2, imgW, imgH, 0, 0, imgW, imgH);
-                        result.fg = tmpCanvas.toDataURL('image/png').split(',')[1];
-                    }
-                } catch(e) {}
-
-                return JSON.stringify(result);
+                # 获取背景图（带缺口）- 直接从 canvas 截图
+                bg_b64 = self.browser.run_js('''
+                var bgCanvas = document.querySelector('.tncode_canvas_bg');
+                if (!bgCanvas) return null;
+                return bgCanvas.toDataURL('image/png').split(',')[1];
                 ''')
 
-                if isinstance(img_data, str):
-                    img_data = json.loads(img_data)
+                # 获取完整图（无缺口）- 从精灵图正确区域提取
+                # 先探测精灵图布局，逐行尝试提取
+                sprite_info = self._get_sprite_info()
+                imgW = 240
+                imgH = 150
+                if sprite_info:
+                    imgW = sprite_info.get('imgW', 240)
+                    imgH = sprite_info.get('imgH', 150)
 
-                bg_b64 = img_data.get('bg')
-                fg_b64 = img_data.get('fg')
+                fg_b64 = self.browser.run_js(f'''
+                var t = window.tncode;
+                var img = (t && t._img) || document.querySelector('.tncode_div img');
+                if (!img || !img.complete || img.naturalWidth === 0) return null;
+                var imgW = {imgW};
+                var imgH = {imgH};
+                var natW = img.naturalWidth;
+                var natH = img.naturalHeight;
+                // 精灵图可能按行排列：row0=背景, row1=拼图块, row2=阴影
+                // 或者：row0=背景, row1=拼图块+阴影
+                // 取第二行（row1）作为拼图块
+                var tmpCanvas = document.createElement('canvas');
+                tmpCanvas.width = imgW;
+                tmpCanvas.height = imgH;
+                var ctx = tmpCanvas.getContext('2d');
+                ctx.drawImage(img, 0, imgH, imgW, imgH, 0, 0, imgW, imgH);
+                return tmpCanvas.toDataURL('image/png').split(',')[1];
+                ''')
 
                 if bg_b64 and fg_b64:
+                    # 尝试 slide_match
                     result = self.ddddocr.slide_match(
                         base64.b64decode(fg_b64),
                         base64.b64decode(bg_b64)
@@ -140,13 +167,57 @@ class LaowangSigner:
                     if result and 'target' in result:
                         x = result['target'][0]
                         logger.info(f"🎯 ddddocr 识别: {x}px")
-                        return int(x)
+                        if 10 < x < imgW - 10:
+                            return int(x)
+
+                    # slide_match 结果不合理，尝试截图方式
+                    logger.debug("slide_match 结果可疑，尝试截图方式...")
+
+                # 备用：截图方式 - 直接截图验证码区域
+                bg_el = self.browser.ele('.tncode_canvas_bg', timeout=1)
+                if bg_el:
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                        bg_path = f.name
+                    bg_el.get_screenshot(bg_path)
+
+                    slider_img = self.browser.ele('.tncode_div img', timeout=1)
+                    if slider_img:
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                            fg_path = f.name
+                        slider_img.get_screenshot(fg_path)
+
+                        with open(fg_path, 'rb') as f:
+                            fg_bytes = f.read()
+                        with open(bg_path, 'rb') as f:
+                            bg_bytes = f.read()
+
+                        result = self.ddddocr.slide_match(fg_bytes, bg_bytes)
+                        try:
+                            os.unlink(fg_path)
+                            os.unlink(bg_path)
+                        except:
+                            pass
+
+                        if result and 'target' in result:
+                            x = result['target'][0]
+                            logger.info(f"🎯 ddddocr 截图识别: {x}px")
+                            if 10 < x < imgW - 10:
+                                return int(x)
+
             except Exception as e:
                 logger.debug(f"ddddocr 失败: {e}")
 
-        # 方法2: Canvas 比对
+        # 方法2: Canvas 像素比对
         try:
-            gap = self.browser.run_js('''
+            # 先获取精灵图信息用于正确提取
+            sprite_info = self._get_sprite_info()
+            imgW = 240
+            imgH = 150
+            if sprite_info:
+                imgW = sprite_info.get('imgW', 240)
+                imgH = sprite_info.get('imgH', 150)
+
+            gap = self.browser.run_js(f'''
             var t = window.tncode;
             var bgCanvas = document.querySelector('.tncode_canvas_bg');
             if (!bgCanvas || bgCanvas.width === 0) return -1;
@@ -154,41 +225,42 @@ class LaowangSigner:
             var img = (t && t._img) || document.querySelector('.tncode_div img');
             if (!img || !img.complete || img.naturalWidth === 0) return -2;
 
-            var imgW = (t && t._img_w) || 240;
-            var imgH = (t && t._img_h) || 150;
+            var imgW = {imgW};
+            var imgH = {imgH};
             var markW = (t && t._mark_w) || 50;
             var maxOffset = imgW - markW;
 
+            // 从精灵图第二行提取完整图（含拼图块）
             var tmpCanvas = document.createElement('canvas');
             tmpCanvas.width = imgW;
             tmpCanvas.height = imgH;
             var tmpCtx = tmpCanvas.getContext('2d');
-            try {
-                tmpCtx.drawImage(img, 0, imgH * 2, imgW, imgH, 0, 0, imgW, imgH);
-            } catch(e) { return -3; }
+            try {{
+                tmpCtx.drawImage(img, 0, imgH, imgW, imgH, 0, 0, imgW, imgH);
+            }} catch(e) {{ return -3; }}
 
             var bgData = bgCanvas.getContext('2d').getImageData(0, 0, imgW, imgH);
             var fullData = tmpCtx.getImageData(0, 0, imgW, imgH);
 
             var diffCounts = new Array(imgW).fill(0);
             var checkRows = [25, 40, 55, 70, 85, 100, 115, 130];
-            for (var ri = 0; ri < checkRows.length; ri++) {
+            for (var ri = 0; ri < checkRows.length; ri++) {{
                 var y = checkRows[ri];
-                for (var x = 0; x < imgW; x++) {
+                for (var x = 0; x < imgW; x++) {{
                     var idx = (y * imgW + x) * 4;
                     var dr = Math.abs(bgData.data[idx] - fullData.data[idx]);
                     var dg = Math.abs(bgData.data[idx+1] - fullData.data[idx+1]);
                     var db = Math.abs(bgData.data[idx+2] - fullData.data[idx+2]);
                     if (dr + dg + db > 30) diffCounts[x]++;
-                }
-            }
+                }}
+            }}
 
             var bestX = -1, bestSum = 0;
-            for (var x = 0; x <= maxOffset; x++) {
+            for (var x = 0; x <= maxOffset; x++) {{
                 var sum = 0;
                 for (var w = 0; w < markW; w++) sum += diffCounts[x + w];
-                if (sum > bestSum) { bestSum = sum; bestX = x; }
-            }
+                if (sum > bestSum) {{ bestSum = sum; bestX = x; }}
+            }}
 
             if (bestSum < checkRows.length * markW * 0.2) return -4;
             return bestX;
@@ -206,11 +278,14 @@ class LaowangSigner:
         """模拟滑块拖动（物理运动轨迹）"""
         import random as _rnd
 
+        # 添加随机偏移，避免每次精确命中同一位置
+        offset = _rnd.randint(-3, 3)
+        adjusted_dist = max(10, distance + offset)
         mid_ratio = _rnd.uniform(0.55, 0.75)
         y_variance = _rnd.randint(5, 10)
 
         js_code = f'''
-        var DIST = {distance};
+        var DIST = {adjusted_dist};
         var t = window.tncode;
         var slider = document.querySelector('.slide_block');
         if (!t || !slider) return 'no_handler';
@@ -229,7 +304,7 @@ class LaowangSigner:
             }});
         }}
 
-        // 物理运动轨迹
+        // 物理运动轨迹（加速-减速-微调）
         var points = [];
         var mid = DIST * {mid_ratio};
         var sum = 0, v = 0, dt = 0.03;
@@ -246,41 +321,43 @@ class LaowangSigner:
         // 开始拖动
         t._block_start_move(makeME('mousedown', startX, startY, false));
 
-        // 执行轨迹
-        for (var i = 0; i < points.length; i++) {{
-            var wait = 2 + Math.floor(Math.random() * 8);
-            var endWait = Date.now() + wait;
-            while (Date.now() < endWait) {{}}
-
+        // 执行轨迹（用 setTimeout 替代 busy-wait）
+        var i = 0;
+        function doStep() {{
+            if (i >= points.length) {{
+                // 超调回退
+                setTimeout(function() {{
+                    t._block_on_move(makeME('mousemove', startX + DIST + 2, startY, false));
+                    setTimeout(function() {{
+                        t._block_on_move(makeME('mousemove', startX + DIST, startY, false));
+                        // 释放前停顿
+                        setTimeout(function() {{
+                            t._block_on_end(makeME('mouseup', startX + DIST, startY, true));
+                        }}, 40 + Math.floor(Math.random() * 40));
+                    }}, 30 + Math.floor(Math.random() * 30));
+                }}, 30 + Math.floor(Math.random() * 30));
+                return;
+            }}
             var x = startX + points[i];
             var y = startY + Math.round((Math.random() - 0.5) * {y_variance} * 2);
             t._block_on_move(makeME('mousemove', x, y, false));
+            i++;
+            setTimeout(doStep, 2 + Math.floor(Math.random() * 8));
         }}
-
-        // 超调回退
-        var wait = 30 + Math.floor(Math.random() * 30);
-        var endWait = Date.now() + wait;
-        while (Date.now() < endWait) {{}}
-        t._block_on_move(makeME('mousemove', startX + DIST + 2, startY, false));
-        wait = 30 + Math.floor(Math.random() * 30);
-        endWait = Date.now() + wait;
-        while (Date.now() < endWait) {{}}
-        t._block_on_move(makeME('mousemove', startX + DIST, startY, false));
-
-        // 释放前停顿
-        wait = 40 + Math.floor(Math.random() * 40);
-        endWait = Date.now() + wait;
-        while (Date.now() < endWait) {{}}
-
-        // 释放
-        t._block_on_end(makeME('mouseup', startX + DIST, startY, true));
-
-        return 'ok:' + t._mark_offset;
+        doStep();
+        'async_started';
         '''
 
         try:
             result = self.browser.run_js(js_code)
-            return result and str(result).startswith('ok')
+            if result and str(result).startswith('async_started'):
+                # 等待异步拖动完成
+                time.sleep(3)
+                # 检查拖动结果
+                mark_offset = self.browser.run_js('return window.tncode ? window.tncode._mark_offset : null;')
+                logger.debug(f"滑块偏移: {mark_offset}")
+                return True
+            return False
         except Exception as e:
             logger.debug(f"拖动失败: {e}")
             return False
@@ -290,9 +367,20 @@ class LaowangSigner:
         try:
             result = self.browser.run_js('''
             var t = window.tncode;
-            if (t && t._result === true) return true;
+            if (!t) return false;
+            // 多种成功判断
+            if (t._result === true) return true;
+            if (t._result === 'success') return true;
+            if (typeof t.isVerified === 'function' && t.isVerified()) return true;
+            // 检查隐藏输入
             var inp = document.getElementById('clicaptcha-submit-info');
             if (inp && inp.value && inp.value.indexOf('_ok') > -1) return true;
+            // 检查滑块是否到达终点
+            if (t._mark_offset > 0 && t._block_x > 0) {{
+                var imgW = t._img_w || 240;
+                var markW = t._mark_w || 50;
+                if (t._mark_offset >= imgW - markW - 5) return true;
+            }}
             return false;
             ''')
             return bool(result)
