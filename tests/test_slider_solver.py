@@ -122,3 +122,50 @@ class TestSolveWithOpencv:
 
         result = solver.solve_with_opencv(b'', b'')
         assert result == -1
+
+
+class TestSolveWithDdddocr:
+    """测试 ddddocr 识别"""
+
+    def test_solve_with_ddddocr_returns_position(self):
+        """ddddocr 识别成功应返回位置"""
+        from slider_solver import SliderSolver
+
+        # Mock ocr 对象
+        mock_ocr = Mock()
+        mock_ocr.slide_match.return_value = {'target': [120, 50]}
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser, ocr=mock_ocr)
+
+        # 创建简单的测试图片
+        bg_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        full_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+
+        result = solver.solve_with_ddddocr(bg_bytes, full_bytes)
+
+        assert result == 120
+        mock_ocr.slide_match.assert_called_once()
+
+    def test_solve_with_ddddocr_returns_minus1_without_ocr(self):
+        """没有 ocr 时应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser, ocr=None)
+
+        result = solver.solve_with_ddddocr(b'', b'')
+        assert result == -1
+
+    def test_solve_with_ddddocr_returns_minus1_on_failure(self):
+        """识别失败应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_ocr = Mock()
+        mock_ocr.slide_match.return_value = None
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser, ocr=mock_ocr)
+
+        result = solver.solve_with_ddddocr(b'\x00' * 100, b'\x00' * 100)
+        assert result == -1

@@ -220,6 +220,40 @@ class SliderSolver:
             logger.debug(f"OpenCV 识别失败: {e}")
             return -1
 
+    def solve_with_ddddocr(self, bg_bytes: bytes, full_bytes: bytes) -> int:
+        """
+        使用 ddddocr 识别缺口
+
+        Args:
+            bg_bytes: 背景图（带缺口）字节数据
+            full_bytes: 完整图字节数据
+
+        Returns:
+            缺口 x 坐标，失败返回 -1
+        """
+        if not self.ocr:
+            return -1
+
+        try:
+            result = self.ocr.slide_match(
+                full_bytes,
+                bg_bytes,
+                simple_target=False
+            )
+
+            if result and 'target' in result:
+                x = int(result['target'][0])
+                if self.validate_position(x):
+                    logger.info(f"🎯 ddddocr 识别缺口: {x}px")
+                    return x
+
+            logger.debug("ddddocr 识别结果无效")
+            return -1
+
+        except Exception as e:
+            logger.debug(f"ddddocr 识别失败: {e}")
+            return -1
+
     def validate_position(self, x: int) -> bool:
         """
         校验识别位置是否合理
