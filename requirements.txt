@@ -1,0 +1,13 @@
+# requirements.txt
+
+# 必需依赖
+DrissionPage>=1.0.0
+
+# 推荐依赖（滑块识别）
+ddddocr>=1.4.0
+
+# 可选依赖（更精准的滑块识别）
+# opencv-python>=4.5.0
+
+# 环境变量管理
+python-dotenv>=1.0.0
