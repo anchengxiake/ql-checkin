@@ -169,3 +169,43 @@ class TestSolveWithDdddocr:
 
         result = solver.solve_with_ddddocr(b'\x00' * 100, b'\x00' * 100)
         assert result == -1
+
+
+class TestSolveWithCanvas:
+    """测试 Canvas 像素比对识别"""
+
+    def test_solve_with_canvas_returns_position(self):
+        """Canvas 识别成功应返回位置"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        mock_browser.run_js.return_value = 120
+
+        solver = SliderSolver(browser=mock_browser)
+        result = solver.solve_with_canvas()
+
+        assert result == 120
+
+    def test_solve_with_canvas_returns_minus1_on_failure(self):
+        """识别失败应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        mock_browser.run_js.return_value = -1
+
+        solver = SliderSolver(browser=mock_browser)
+        result = solver.solve_with_canvas()
+
+        assert result == -1
+
+    def test_solve_with_canvas_returns_minus1_on_exception(self):
+        """异常时应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        mock_browser.run_js.side_effect = Exception("JS error")
+
+        solver = SliderSolver(browser=mock_browser)
+        result = solver.solve_with_canvas()
+
+        assert result == -1

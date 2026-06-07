@@ -254,6 +254,72 @@ class SliderSolver:
             logger.debug(f"ddddocr 识别失败: {e}")
             return -1
 
+    def solve_with_canvas(self) -> int:
+        """
+        使用 Canvas 像素比对识别缺口
+
+        Returns:
+            缺口 x 坐标，失败返回 -1
+        """
+        try:
+            gap = self.browser.run_js('''
+            var t = window.tncode;
+            var bgCanvas = document.querySelector('.tncode_canvas_bg');
+            if (!bgCanvas || bgCanvas.width === 0) return -1;
+
+            var img = (t && t._img) || document.querySelector('.tncode_div img');
+            if (!img || !img.complete || img.naturalWidth === 0) return -2;
+
+            var imgW = (t && t._img_w) || 240;
+            var imgH = (t && t._img_h) || 150;
+            var markW = (t && t._mark_w) || 50;
+
+            // 提取完整图（第三行）
+            var tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = imgW;
+            tmpCanvas.height = imgH;
+            var tmpCtx = tmpCanvas.getContext('2d');
+            tmpCtx.drawImage(img, 0, imgH * 2, imgW, imgH, 0, 0, imgW, imgH);
+
+            var bgData = bgCanvas.getContext('2d').getImageData(0, 0, imgW, imgH);
+            var fullData = tmpCtx.getImageData(0, 0, imgW, imgH);
+
+            // 计算差异
+            var diffCounts = new Array(imgW).fill(0);
+            var rows = [25, 40, 55, 70, 85, 100, 115, 130];
+            for (var r = 0; r < rows.length; r++) {
+                var y = rows[r];
+                for (var x = 0; x < imgW; x++) {
+                    var i = (y * imgW + x) * 4;
+                    var diff = Math.abs(bgData.data[i] - fullData.data[i]) +
+                               Math.abs(bgData.data[i+1] - fullData.data[i+1]) +
+                               Math.abs(bgData.data[i+2] - fullData.data[i+2]);
+                    if (diff > 30) diffCounts[x]++;
+                }
+            }
+
+            // 滑动窗口找最佳位置
+            var bestX = -1, bestSum = 0;
+            for (var x = 0; x <= imgW - markW; x++) {
+                var sum = 0;
+                for (var w = 0; w < markW; w++) sum += diffCounts[x + w];
+                if (sum > bestSum) { bestSum = sum; bestX = x; }
+            }
+
+            return (bestSum < rows.length * markW * 0.2) ? -3 : bestX;
+            ''')
+
+            if gap and gap > 5:
+                logger.info(f"🎯 Canvas 识别缺口: {gap}px")
+                return int(gap)
+
+            logger.debug(f"Canvas 识别失败: {gap}")
+            return -1
+
+        except Exception as e:
+            logger.debug(f"Canvas 比对失败: {e}")
+            return -1
+
     def validate_position(self, x: int) -> bool:
         """
         校验识别位置是否合理
