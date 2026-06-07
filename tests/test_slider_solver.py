@@ -209,3 +209,56 @@ class TestSolveWithCanvas:
         result = solver.solve_with_canvas()
 
         assert result == -1
+
+
+class TestSolve:
+    """测试主识别方法"""
+
+    def test_solve_returns_median(self):
+        """应返回多次识别的中位数"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        mock_browser.run_js.return_value = "fake_base64"
+
+        solver = SliderSolver(browser=mock_browser)
+
+        # Mock 各识别方法返回不同值
+        with patch.object(solver, 'extract_images', return_value=(b'bg', b'full')):
+            with patch.object(solver, 'solve_with_opencv', side_effect=[100, 110, 105]):
+                with patch.object(solver, 'solve_with_ddddocr', return_value=-1):
+                    with patch.object(solver, 'solve_with_canvas', return_value=-1):
+                        result = solver.solve()
+
+        # 中位数应该是 105
+        assert result == 105
+
+    def test_solve_returns_minus1_when_all_fail(self):
+        """所有方法都失败时应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser)
+
+        with patch.object(solver, 'extract_images', return_value=(b'bg', b'full')):
+            with patch.object(solver, 'solve_with_opencv', return_value=-1):
+                with patch.object(solver, 'solve_with_ddddocr', return_value=-1):
+                    with patch.object(solver, 'solve_with_canvas', return_value=-1):
+                        result = solver.solve()
+
+        assert result == -1
+
+    def test_solve_skips_opencv_when_unavailable(self):
+        """没有 OpenCV 时应跳过"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser)
+        solver.has_opencv = False
+
+        with patch.object(solver, 'extract_images', return_value=(b'bg', b'full')):
+            with patch.object(solver, 'solve_with_ddddocr', side_effect=[-1, -1, -1]):
+                with patch.object(solver, 'solve_with_canvas', side_effect=[120, 115, 118]):
+                    result = solver.solve()
+
+        assert result == 118

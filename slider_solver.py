@@ -320,6 +320,74 @@ class SliderSolver:
             logger.debug(f"Canvas 比对失败: {e}")
             return -1
 
+    def solve(self, max_attempts: int = 5) -> int:
+        """
+        主识别入口，自动降级 + 多次识别取中位数
+
+        Args:
+            max_attempts: 最大重试次数
+
+        Returns:
+            缺口 x 坐标，失败返回 -1
+        """
+        # 1. 提取图片
+        images = self.extract_images()
+        if not images:
+            logger.warning("无法提取图片，跳过识别")
+            return -1
+
+        bg_bytes, full_bytes = images
+
+        # 2. 多次识别取中位数
+        results = []
+
+        for attempt in range(3):
+            x = self._solve_once(bg_bytes, full_bytes)
+            if self.validate_position(x):
+                results.append(x)
+                logger.debug(f"第 {attempt + 1} 次识别: {x}px")
+
+        if not results:
+            logger.warning("所有识别方法均失败")
+            return -1
+
+        # 3. 取中位数
+        results.sort()
+        median = results[len(results) // 2]
+        logger.info(f"✅ 最终识别结果: {median}px (共 {len(results)} 次有效识别)")
+
+        return median
+
+    def _solve_once(self, bg_bytes: bytes, full_bytes: bytes) -> int:
+        """
+        单次识别尝试，按优先级调用各引擎
+
+        Args:
+            bg_bytes: 背景图字节数据
+            full_bytes: 完整图字节数据
+
+        Returns:
+            缺口 x 坐标，失败返回 -1
+        """
+        # 优先级 1: OpenCV
+        if self.has_opencv:
+            x = self.solve_with_opencv(bg_bytes, full_bytes)
+            if self.validate_position(x):
+                return x
+
+        # 优先级 2: ddddocr
+        if self.ocr:
+            x = self.solve_with_ddddocr(bg_bytes, full_bytes)
+            if self.validate_position(x):
+                return x
+
+        # 优先级 3: Canvas
+        x = self.solve_with_canvas()
+        if self.validate_position(x):
+            return x
+
+        return -1
+
     def validate_position(self, x: int) -> bool:
         """
         校验识别位置是否合理
