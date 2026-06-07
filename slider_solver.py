@@ -165,6 +165,61 @@ class SliderSolver:
             logger.debug(f"获取第{row}行失败: {e}")
         return None
 
+    def solve_with_opencv(self, bg_bytes: bytes, full_bytes: bytes) -> int:
+        """
+        使用 OpenCV 识别缺口
+
+        方法: Canny 边缘检测 + 模板匹配
+
+        Args:
+            bg_bytes: 背景图（带缺口）字节数据
+            full_bytes: 完整图字节数据
+
+        Returns:
+            缺口 x 坐标，失败返回 -1
+        """
+        if not self.has_opencv:
+            return -1
+
+        try:
+            import cv2
+            import numpy as np
+
+            # 解码图片
+            bg_img = cv2.imdecode(
+                np.frombuffer(bg_bytes, np.uint8),
+                cv2.IMREAD_GRAYSCALE
+            )
+            full_img = cv2.imdecode(
+                np.frombuffer(full_bytes, np.uint8),
+                cv2.IMREAD_GRAYSCALE
+            )
+
+            if bg_img is None or full_img is None:
+                return -1
+
+            # Canny 边缘检测
+            bg_edges = cv2.Canny(bg_img, 100, 200)
+            full_edges = cv2.Canny(full_img, 100, 200)
+
+            # 模板匹配
+            result = cv2.matchTemplate(bg_edges, full_edges, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            # 置信度检查
+            if max_val > 0.8:
+                x = max_loc[0]
+                if self.validate_position(x):
+                    logger.info(f"🎯 OpenCV 识别缺口: {x}px (置信度: {max_val:.2f})")
+                    return x
+
+            logger.debug(f"OpenCV 识别置信度不足: {max_val:.2f}")
+            return -1
+
+        except Exception as e:
+            logger.debug(f"OpenCV 识别失败: {e}")
+            return -1
+
     def validate_position(self, x: int) -> bool:
         """
         校验识别位置是否合理

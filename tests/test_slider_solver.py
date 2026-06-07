@@ -62,3 +62,63 @@ class TestExtractImages:
         result = solver.extract_images()
 
         assert result is None
+
+
+class TestSolveWithOpencv:
+    """测试 OpenCV 识别"""
+
+    @patch('slider_solver.SliderSolver._check_opencv', return_value=True)
+    def test_solve_with_opencv_returns_position(self, mock_check):
+        """OpenCV 识别成功应返回位置"""
+        from slider_solver import SliderSolver
+        import numpy as np
+        import cv2
+
+        np.random.seed(42)
+        h, w = 150, 240
+
+        # 创建有丰富纹理的背景（随机矩形提供边缘特征）
+        bg_gray = np.zeros((h, w), dtype=np.uint8)
+        for _ in range(50):
+            x = np.random.randint(0, w - 30)
+            y = np.random.randint(0, h - 30)
+            color = np.random.randint(50, 255)
+            rw = np.random.randint(10, 30)
+            rh = np.random.randint(10, 30)
+            cv2.rectangle(bg_gray, (x, y), (x + rw, y + rh), int(color), -1)
+
+        # 缺口位置
+        gap_x, gap_w = 120, 40
+
+        # 带缺口的背景：缺口区域变暗（保留部分原始内容）
+        bg_with_gap = bg_gray.copy()
+        bg_with_gap[:, gap_x:gap_x + gap_w] = (
+            bg_gray[:, gap_x:gap_x + gap_w].astype(float) * 0.4 + 20
+        ).astype(np.uint8)
+
+        # 拼图块：缺口位置的原始内容
+        puzzle_piece = bg_gray[:, gap_x:gap_x + gap_w].copy()
+
+        # 编码为 PNG 字节
+        _, bg_bytes = cv2.imencode('.png', cv2.cvtColor(bg_with_gap, cv2.COLOR_GRAY2BGR))
+        _, full_bytes = cv2.imencode('.png', cv2.cvtColor(puzzle_piece, cv2.COLOR_GRAY2BGR))
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser)
+        solver.has_opencv = True
+
+        result = solver.solve_with_opencv(bg_bytes.tobytes(), full_bytes.tobytes())
+
+        assert result > 0
+        assert solver.validate_position(result)
+
+    def test_solve_with_opencv_returns_minus1_without_opencv(self):
+        """没有 OpenCV 时应返回 -1"""
+        from slider_solver import SliderSolver
+
+        mock_browser = Mock()
+        solver = SliderSolver(browser=mock_browser)
+        solver.has_opencv = False
+
+        result = solver.solve_with_opencv(b'', b'')
+        assert result == -1
