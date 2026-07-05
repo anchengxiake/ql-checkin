@@ -1004,12 +1004,22 @@ class LaowangSigner:
         time.sleep(2)
 
         # 输入账号密码
-        try:
-            self.browser.ele('@name=username').input(self.username)
-            self.browser.ele('@name=password').input(self.password)
-            time.sleep(0.5)
-        except Exception as e:
-            logger.error(f"❌ 输入账号密码失败: {e}")
+        filled = None
+        for _ in range(15):
+            try:
+                if self._is_logged_in():
+                    logger.info("✅ 已登录，跳过输入账号密码")
+                    return True
+                filled = self._fill_login_form()
+                if filled.get('ok'):
+                    time.sleep(0.5)
+                    break
+            except Exception as e:
+                filled = {'ok': False, 'error': str(e)}
+            time.sleep(1)
+
+        if not filled or not filled.get('ok'):
+            logger.error(f"❌ 输入账号密码失败: {self._login_debug_message(filled)}")
             return False
 
         # 处理滑块
@@ -1056,6 +1066,117 @@ class LaowangSigner:
 
         logger.error("❌ 登录失败，请检查账号密码")
         return False
+
+    def _is_logged_in(self):
+        """检查是否已经登录"""
+        try:
+            html = self.browser.html or ''
+            return 'member.php?mod=logging&action=logout' in html or 'action=logout' in html
+        except Exception:
+            return False
+
+    def _fill_login_form(self):
+        """使用 JS 兼容 Discuz 不同登录表单结构"""
+        username = json.dumps(self.username)
+        password = json.dumps(self.password)
+        script = f'''
+        var username = {username};
+        var password = {password};
+
+        function visible(el) {{
+            if (!el) return false;
+            var r = el.getBoundingClientRect();
+            var s = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+        }}
+
+        function pick(selectors) {{
+            var found = [];
+            for (var i = 0; i < selectors.length; i++) {{
+                found = found.concat(Array.from(document.querySelectorAll(selectors[i])));
+            }}
+            if (!found.length) return null;
+            return found.find(visible) || found[0];
+        }}
+
+        function setValue(el, value) {{
+            el.focus();
+            var setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+            if (setter && setter.set) setter.set.call(el, value);
+            else el.value = value;
+            el.dispatchEvent(new Event('input', {{bubbles: true}}));
+            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+        }}
+
+        var userEl = pick([
+            'input[name="username"]',
+            'input[id^="username"]',
+            'input[id*="username"]',
+            'input[name="email"]',
+            'input[type="email"]',
+            'input[type="text"]'
+        ]);
+        var passEl = pick([
+            'input[name="password"]',
+            'input[id^="password"]',
+            'input[id*="password"]',
+            'input[type="password"]'
+        ]);
+
+        var inputs = Array.from(document.querySelectorAll('input')).slice(0, 20).map(function(el) {{
+            return {{
+                type: el.type || '',
+                name: el.name || '',
+                id: el.id || '',
+                placeholder: el.placeholder || '',
+                visible: visible(el)
+            }};
+        }});
+
+        if (!userEl || !passEl) {{
+            return {{
+                ok: false,
+                url: location.href,
+                title: document.title,
+                has_tncode: !!document.querySelector('.tncode,.tncode_div,.slide_block'),
+                text: (document.body && document.body.innerText || '').slice(0, 300),
+                inputs: inputs
+            }};
+        }}
+
+        setValue(userEl, username);
+        setValue(passEl, password);
+        return {{
+            ok: true,
+            user: {{name: userEl.name || '', id: userEl.id || '', type: userEl.type || ''}},
+            pass: {{name: passEl.name || '', id: passEl.id || '', type: passEl.type || ''}},
+            inputs: inputs.length
+        }};
+        '''
+        result = self.browser.run_js(script)
+        return result if isinstance(result, dict) else {'ok': False, 'raw': result}
+
+    def _login_debug_message(self, data):
+        """格式化登录页调试信息"""
+        if not isinstance(data, dict):
+            data = {}
+        try:
+            info = {
+                'url': data.get('url') or getattr(self.browser, 'url', ''),
+                'title': data.get('title', ''),
+                'has_tncode': data.get('has_tncode'),
+                'text': data.get('text', ''),
+                'inputs': data.get('inputs', []),
+                'error': data.get('error', '')
+            }
+            if os.getenv('LAOWANG_DEBUG', '').lower() == 'true':
+                debug_path = os.path.join(os.getcwd(), 'laowang_login_debug.html')
+                with open(debug_path, 'w', encoding='utf-8') as f:
+                    f.write(self.browser.html or '')
+                info['html_saved'] = debug_path
+            return json.dumps(info, ensure_ascii=False)[:1200]
+        except Exception as e:
+            return str(e)
 
     def sign(self):
         """签到"""
@@ -1253,7 +1374,8 @@ def main():
 
     # 随机延迟
     max_delay = int(os.getenv('MAX_RANDOM_DELAY', '300'))
-    if max_delay > 0:
+    use_random = os.getenv('RANDOM_SIGNIN', 'true').lower() == 'true'
+    if use_random and max_delay > 0:
         delay = random.randint(0, max_delay)
         print(f"⏳ 随机延迟 {delay} 秒...")
         time.sleep(delay)
