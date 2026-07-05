@@ -414,6 +414,71 @@ def task_ajax(browser, action: str, cid: str, label: str) -> tuple[bool, str]:
     return False, text_short or f"HTTP {status}"
 
 
+def task_ajax_detail(browser, action: str, cid: str, label: str) -> dict:
+    """执行任务 Ajax 并返回适合通知汇总的结构化结果。"""
+    ok, message = task_ajax(browser, action, cid, label)
+    text = message or ""
+    cdata = re.search(r"<!\[CDATA\[(.*?)\]\]>", text)
+    if cdata:
+        text = cdata.group(1).strip()
+    if text.startswith("success "):
+        text = text[8:].strip()
+    elif text.startswith("confirm "):
+        text = text[8:].strip()
+
+    detail = {
+        "ok": ok,
+        "message": text,
+        "status": "success" if ok else "failed",
+        "summary": text,
+        "cooldown_hours": None,
+    }
+
+    cooldown = re.search(r"还没超过\s*(\d+)\s*小时", text)
+    if cooldown:
+        detail["status"] = "cooldown"
+        detail["summary"] = f"冷却中，剩余约 {cooldown.group(1)} 小时"
+        detail["cooldown_hours"] = int(cooldown.group(1))
+        return detail
+
+    if "未申请任务" in text:
+        detail["status"] = "not_applied"
+        detail["summary"] = "当前没有进行中的任务"
+        return detail
+
+    if any(x in text for x in ["已经申请", "申请", "领取完成"]):
+        detail["status"] = "applied"
+        detail["summary"] = "已申请"
+        return detail
+
+    if any(x in text for x in ["已经完成", "已完成", "完成!"]):
+        detail["status"] = "completed"
+        detail["summary"] = "已完成并结算"
+        return detail
+
+    if ok:
+        detail["summary"] = "操作成功"
+    return detail
+
+
+def append_task_result(log_lines: list, task_name: str, phase: str, detail: dict, fallback_ok: bool = False):
+    """把任务结果整理成通知友好的单行文本。"""
+    status = detail.get("status")
+    message = detail.get("summary") or detail.get("message") or ""
+
+    if fallback_ok:
+        log_lines.append(f"   ✅ {task_name}{phase}: 页面按钮点击成功")
+    elif status in ("success", "applied", "completed"):
+        log_lines.append(f"   ✅ {task_name}{phase}: {message}")
+    elif status == "cooldown":
+        log_lines.append(f"   ⏳ {task_name}{phase}: {message}")
+    elif status == "not_applied":
+        log_lines.append(f"   ℹ️ {task_name}{phase}: {message}")
+    else:
+        raw = (detail.get("message") or "").strip()
+        log_lines.append(f"   ⚠️ {task_name}{phase}: {message or raw or '未完成'}")
+
+
 def task_click_fallback(browser, selectors, label: str) -> bool:
     """Ajax 失败时使用页面按钮兜底。"""
     ok = click_first(browser, selectors, label, timeout=2)
@@ -720,19 +785,25 @@ def do_task(browser, site_base: str) -> str:
     # 查找可申请的任务 (p_14=周常, p_15=日常)
     apply_count = 0
     
-    ok, _ = task_ajax(browser, "job", "15", "日常任务申请")
-    if ok or task_click_fallback(browser, ['#p_15 a img', '#p_15 a', 'xpath://*[@id="p_15"]//a'], "日常任务申请"):
-        log_lines.append("   ✅ 日常任务已申请/已点击")
+    daily_apply = task_ajax_detail(browser, "job", "15", "日常任务申请")
+    daily_apply_fallback = False
+    if daily_apply["ok"] or daily_apply["status"] == "cooldown":
         apply_count += 1
     else:
-        log_lines.append("   日常任务暂不可申请或已申请")
+        daily_apply_fallback = task_click_fallback(browser, ['#p_15 a img', '#p_15 a', 'xpath://*[@id="p_15"]//a'], "日常任务申请")
+        if daily_apply_fallback:
+            apply_count += 1
+    append_task_result(log_lines, "日常", "申请", daily_apply, daily_apply_fallback)
     
-    ok, _ = task_ajax(browser, "job", "14", "周常任务申请")
-    if ok or task_click_fallback(browser, ['#p_14 a img', '#p_14 a', 'xpath://*[@id="p_14"]//a'], "周常任务申请"):
-        log_lines.append("   ✅ 周常任务已申请/已点击")
+    weekly_apply = task_ajax_detail(browser, "job", "14", "周常任务申请")
+    weekly_apply_fallback = False
+    if weekly_apply["ok"] or weekly_apply["status"] == "cooldown":
         apply_count += 1
     else:
-        log_lines.append("   周常任务暂不可申请或已申请")
+        weekly_apply_fallback = task_click_fallback(browser, ['#p_14 a img', '#p_14 a', 'xpath://*[@id="p_14"]//a'], "周常任务申请")
+        if weekly_apply_fallback:
+            apply_count += 1
+    append_task_result(log_lines, "周常", "申请", weekly_apply, weekly_apply_fallback)
     
     # ===== 步骤2: 完成任务 =====
     log_lines.append("📋 步骤2: 完成任务")
@@ -743,17 +814,23 @@ def do_task(browser, site_base: str) -> str:
     time.sleep(2)
     wait_for_cloudflare(browser)
     
-    ok, _ = task_ajax(browser, "job2", "15", "日常任务完成")
-    if ok or task_click_fallback(browser, ['#both_15 a img', '#both_15 a', 'xpath://*[@id="both_15"]//a'], "日常任务完成"):
-        log_lines.append("   ✅ 日常任务已完成/已点击")
+    if daily_apply["status"] == "cooldown":
+        log_lines.append("   ℹ️ 日常完成: 申请仍在冷却中，本次无需完成")
     else:
-        log_lines.append("   日常任务暂不可完成")
+        daily_finish = task_ajax_detail(browser, "job2", "15", "日常任务完成")
+        daily_finish_fallback = False
+        if not daily_finish["ok"] and daily_finish["status"] != "not_applied":
+            daily_finish_fallback = task_click_fallback(browser, ['#both_15 a img', '#both_15 a', 'xpath://*[@id="both_15"]//a'], "日常任务完成")
+        append_task_result(log_lines, "日常", "完成", daily_finish, daily_finish_fallback)
     
-    ok, _ = task_ajax(browser, "job2", "14", "周常任务完成")
-    if ok or task_click_fallback(browser, ['#both_14 a img', '#both_14 a', 'xpath://*[@id="both_14"]//a'], "周常任务完成"):
-        log_lines.append("   ✅ 周常任务已完成/已点击")
+    if weekly_apply["status"] == "cooldown":
+        log_lines.append("   ℹ️ 周常完成: 申请仍在冷却中，本次无需完成")
     else:
-        log_lines.append("   周常任务暂不可完成")
+        weekly_finish = task_ajax_detail(browser, "job2", "14", "周常任务完成")
+        weekly_finish_fallback = False
+        if not weekly_finish["ok"] and weekly_finish["status"] != "not_applied":
+            weekly_finish_fallback = task_click_fallback(browser, ['#both_14 a img', '#both_14 a', 'xpath://*[@id="both_14"]//a'], "周常任务完成")
+        append_task_result(log_lines, "周常", "完成", weekly_finish, weekly_finish_fallback)
     
     # ===== 步骤3: 领取奖励 =====
     log_lines.append("📋 步骤3: 领取奖励")
