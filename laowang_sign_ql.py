@@ -1002,6 +1002,8 @@ class LaowangSigner:
 
         self.browser.get(LOGIN_URL)
         time.sleep(2)
+        if not self._wait_cloudflare_clear():
+            return False
 
         # 输入账号密码
         filled = None
@@ -1074,6 +1076,45 @@ class LaowangSigner:
             return 'member.php?mod=logging&action=logout' in html or 'action=logout' in html
         except Exception:
             return False
+
+    def _cloudflare_status(self):
+        """检查是否停在 Cloudflare 安全验证页"""
+        try:
+            result = self.browser.run_js('''
+            var text = (document.body && document.body.innerText || '');
+            var title = document.title || '';
+            var isCf = /Just a moment/i.test(title)
+                || /Performing security verification/i.test(text)
+                || /cf-turnstile-response/i.test(document.documentElement.innerHTML);
+            var ray = (text.match(/Ray ID:\\s*([a-z0-9]+)/i) || [])[1] || '';
+            return {blocked: !!isCf, title: title, ray: ray, text: text.slice(0, 220)};
+            ''')
+            return result if isinstance(result, dict) else {'blocked': False}
+        except Exception as e:
+            return {'blocked': False, 'error': str(e)}
+
+    def _wait_cloudflare_clear(self):
+        """等待 Cloudflare 正常放行；不做安全验证绕过"""
+        timeout = int(os.getenv('LAOWANG_CF_WAIT', '60'))
+        start = time.time()
+        warned = False
+        last_status = {}
+        while time.time() - start < timeout:
+            last_status = self._cloudflare_status()
+            if not last_status.get('blocked'):
+                return True
+            if not warned:
+                logger.warning("⚠️ 当前停在 Cloudflare 安全验证页，等待站点自动放行...")
+                warned = True
+            time.sleep(3)
+
+        logger.error(
+            "❌ Cloudflare 安全验证未通过，青龙无头浏览器未进入论坛登录页。"
+            f" Ray ID: {last_status.get('ray') or 'N/A'}。"
+            " 这不是 LAOWANG_ACCOUNT 格式问题；可尝试更换运行网络、取消或更换 LAOWANG_CUSTOM_HOST，"
+            "或使用能正常通过 Cloudflare 的浏览器环境。"
+        )
+        return False
 
     def _fill_login_form(self):
         """使用 JS 兼容 Discuz 不同登录表单结构"""

@@ -218,6 +218,9 @@ MAX_RANDOM_DELAY=0
 
 # 极少数情况下回退到 ddddocr.slide_match
 LAOWANG_USE_SLIDE_MATCH_FALLBACK=true
+
+# Cloudflare 验证页最长等待秒数，默认 60
+LAOWANG_CF_WAIT=60
 ```
 
 脚本特性：
@@ -317,6 +320,12 @@ LAOWANG_CUSTOM_HOST=104.21.14.105
 ```
 
 如果你的服务器访问站点需要代理，请优先在系统或青龙容器层面配置代理。
+
+### 老王论坛出现 Just a moment
+
+日志里如果出现 `Just a moment...`、`Performing security verification`、`Cloudflare 安全验证未通过`，说明请求被 Cloudflare 前置安全验证拦住，脚本还没有进入论坛登录页。这不是账号变量格式错误。
+
+可以尝试更换青龙运行网络、取消或更换 `LAOWANG_CUSTOM_HOST`，或使用能正常通过 Cloudflare 的浏览器环境。脚本只会等待站点正常放行，不内置绕过 Cloudflare 安全验证的逻辑。
 
 ### Cookie 失效
 
