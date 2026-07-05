@@ -404,6 +404,7 @@ python -m py_compile laowang_sign_ql.py
 本项目整理和维护过程中参考了多个优秀上游项目：
 
 - 天翼云盘、百度网盘、阿里云盘、IKUUU 脚本来源和维护参考：[agluo/ql-script-hub](https://github.com/agluo/ql-script-hub)
+- 哔咔漫画、禁漫天堂脚本来源和维护参考：[forchannot/comic-auto-punch-in](https://github.com/forchannot/comic-auto-punch-in)
 - 夸克网盘脚本来源和维护参考：[anchengxiake/Quark_Auot_Check_In](https://github.com/anchengxiake/Quark_Auot_Check_In)
 - Microsoft Rewards 脚本来源和维护参考：[chiihero/Microsoft-Rewards-Script](https://github.com/chiihero/Microsoft-Rewards-Script)
 
