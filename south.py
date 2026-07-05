@@ -13,7 +13,12 @@ import time
 import random
 import json
 import platform
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ============ DrissionPage 配置 ============
 USE_DRISSIONPAGE = False
@@ -38,13 +43,19 @@ except ImportError:
 # 配置
 DRISSIONPAGE_HEADLESS = os.getenv("DRISSIONPAGE_HEADLESS", "true").lower() == "true"
 DRISSIONPAGE_CHROME_PATH = os.getenv("DRISSIONPAGE_CHROME_PATH", "").strip()
+SOUTHPLUS_USER_AGENT = os.getenv(
+    "SOUTHPLUS_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+).strip()
+SOUTHPLUS_CF_WAIT = int(os.getenv("SOUTHPLUS_CF_WAIT", "60"))
 
 # 随机延迟配置
 max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
 random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
 
 # 站点配置
-DEFAULT_SITE = "https://south-plus.net"
+DEFAULT_SITE = "https://www.south-plus.net"
 
 # 账号密码配置
 SOUTHPLUS_USERNAME = os.getenv("SOUTHPLUS_USERNAME", "").strip()
@@ -99,10 +110,12 @@ def init_browser():
     try:
         co = DrissionPage.ChromiumOptions()
         
-        co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')
+        co.set_user_agent(SOUTHPLUS_USER_AGENT)
         co.set_argument('--no-sandbox')
         co.set_argument('--disable-dev-shm-usage')
         co.set_argument('--disable-gpu')
+        co.set_argument('--disable-blink-features=AutomationControlled')
+        co.set_argument('--window-size=1920,1080')
         co.auto_port()
         
         if DRISSIONPAGE_HEADLESS:
@@ -123,7 +136,7 @@ def init_browser():
 
 def get_cookies():
     """读取环境变量 COOKIE，支持 JSON 格式和普通字符串格式"""
-    cookie_str = os.environ.get("COOKIE", "").strip()
+    cookie_str = os.environ.get("SOUTHPLUS_COOKIE", "").strip() or os.environ.get("COOKIE", "").strip()
     
     # 如果没有 Cookie 但有账号密码，返回 None 表示使用账号密码登录
     if not cookie_str:
@@ -189,100 +202,458 @@ def Push(title: str, message: str):
         print(f"📄 {message}")
 
 
-def wait_for_cloudflare(browser, max_wait: int = 60):
-    """等待 Cloudflare 验证通过"""
+def is_cloudflare_challenge(browser) -> bool:
+    """只识别真正的 Cloudflare 验证页，避免把正常页脚脚本误判为验证中。"""
+    try:
+        result = browser.run_js('''
+        var text = (document.body && document.body.innerText || '');
+        var title = document.title || '';
+        var html = document.documentElement.innerHTML || '';
+        return /Just a moment/i.test(title)
+            || /Performing security verification/i.test(text)
+            || /Checking if the site connection is secure/i.test(text)
+            || /cf-turnstile-response/i.test(html)
+            || /cf-challenge/i.test(html);
+        ''')
+        return bool(result)
+    except Exception:
+        html = (browser.html or "").lower()
+        return "just a moment" in html or "cf-turnstile-response" in html or "cf-challenge" in html
+
+
+def wait_for_cloudflare(browser, max_wait: int = None):
+    """等待 Cloudflare 正常放行；不内置绕过安全验证逻辑。"""
+    max_wait = SOUTHPLUS_CF_WAIT if max_wait is None else max_wait
     waited = 0
     while waited < max_wait:
-        html = browser.html
-        html_lower = html.lower()
-        
-        if "cloudflare" in html_lower or "just a moment" in html_lower or "cf-challenge" in html_lower:
-            print(f"[DrissionPage] 等待 Cloudflare 验证... ({waited}s)")
-            time.sleep(5)
-            waited += 5
-        else:
-            print("[DrissionPage] ✅ Cloudflare 验证已通过")
+        if not is_cloudflare_challenge(browser):
             return True
-    
-    print("[DrissionPage] ⚠️ Cloudflare 验证超时")
+        print(f"[DrissionPage] 等待 Cloudflare 验证... ({waited}s)")
+        time.sleep(5)
+        waited += 5
+
+    print("[DrissionPage] ⚠️ Cloudflare 验证超时，未进入目标页面")
     return False
+
+
+def page_text(browser) -> str:
+    try:
+        return browser.run_js('return document.body ? document.body.innerText : "";') or ""
+    except Exception:
+        return browser.html or ""
+
+
+def is_not_logged_in(browser) -> bool:
+    text = page_text(browser)
+    html = browser.html or ""
+    return any(x in text or x in html for x in [
+        "您还没有登录",
+        "您还没有登录或注册",
+        "还不是论坛会员",
+        "请先登录论坛",
+    ])
+
+
+def is_logged_in(browser) -> bool:
+    text = page_text(browser)
+    html = browser.html or ""
+    if is_not_logged_in(browser):
+        return False
+    return any(x in text or x in html for x in [
+        "退出",
+        "用户中心",
+        "个人首页",
+        "我的主题",
+        "积分",
+        "社区论坛任务",
+    ])
+
+
+def save_debug_html(browser, name: str):
+    if os.getenv("SOUTHPLUS_DEBUG", "false").lower() != "true":
+        return
+    try:
+        path = os.path.join(os.getcwd(), name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(browser.html or "")
+        print(f"[DrissionPage] 调试页面已保存: {path}")
+    except Exception as e:
+        print(f"[DrissionPage] 保存调试页面失败: {e}")
+
+
+def add_cookie(browser, cookie, site_base: str):
+    """兼容字符串 Cookie、Selenium dict 和 DrissionPage dict。"""
+    domain = urlparse(site_base).hostname or "south-plus.net"
+    root_domain = domain[4:] if domain.startswith("www.") else domain
+    base_url = site_base.rstrip("/") + "/"
+
+    def set_one(item, mirror_root=False):
+        item = dict(item)
+        item.setdefault("path", "/")
+        item.setdefault("url", base_url)
+        browser.set.cookies(item)
+        if mirror_root and root_domain != domain:
+            alt = dict(item)
+            alt["domain"] = root_domain
+            alt["url"] = f"https://{root_domain}/"
+            try:
+                browser.set.cookies(alt)
+            except Exception:
+                pass
+
+    if isinstance(cookie, str):
+        names = []
+        for item in cookie.split(";"):
+            item = item.strip()
+            if "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if name and value:
+                names.append(name)
+                mirror_root = name == "cf_clearance"
+                set_one({"name": name, "value": value, "domain": domain, "path": "/"}, mirror_root=mirror_root)
+        print(f"[DrissionPage] 已注入 Cookie: {', '.join(names) if names else '空'}")
+        return
+
+    if not isinstance(cookie, dict):
+        return
+
+    item = dict(cookie)
+    if "domain" not in item:
+        item["domain"] = domain
+    if "path" not in item:
+        item["path"] = "/"
+    set_one(item, mirror_root=item.get("name") == "cf_clearance")
+
+
+def click_first(browser, selectors, label: str, timeout=2) -> bool:
+    for selector in selectors:
+        try:
+            ele = browser.ele(selector, timeout=timeout)
+            if ele:
+                ele.click()
+                print(f"[DrissionPage] ✅ {label}: {selector}")
+                time.sleep(1)
+                return True
+        except Exception:
+            continue
+    print(f"[DrissionPage] {label}: 未找到可点击入口")
+    return False
+
+
+def task_ajax(browser, action: str, cid: str, label: str) -> tuple[bool, str]:
+    """通过 SouthPlus 任务插件 Ajax 接口执行任务操作。"""
+    try:
+        result = browser.run_js(f'''
+        var action = {json.dumps(action)};
+        var cid = {json.dumps(str(cid))};
+        var verify = (typeof verifyhash !== 'undefined' && verifyhash) ? verifyhash : '';
+        var url = 'plugin.php?H_name=tasks&action=ajax&actions=' + encodeURIComponent(action)
+            + '&cid=' + encodeURIComponent(cid)
+            + '&nowtime=' + Date.now();
+        if (verify) url += '&verify=' + encodeURIComponent(verify);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, false);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+        xhr.send(null);
+        return {{
+            status: xhr.status,
+            text: xhr.responseText || '',
+            url: url
+        }};
+        ''')
+    except Exception as e:
+        msg = f"Ajax 调用异常: {e}"
+        print(f"[DrissionPage] ❌ {label}: {msg}")
+        return False, msg
+
+    if not isinstance(result, dict):
+        msg = f"Ajax 返回异常: {result}"
+        print(f"[DrissionPage] ❌ {label}: {msg}")
+        return False, msg
+
+    status = result.get("status")
+    text = (result.get("text") or "").strip()
+    text_short = re.sub(r"\s+", " ", text)[:160]
+    ok_markers = [
+        "success",
+        "任务领取完成",
+        "领取完成",
+        "完成了",
+        "已经申请",
+        "已经领取",
+        "已完成",
+    ]
+    neutral_markers = [
+        "您已经申请过",
+        "没有可领取",
+        "任务不存在",
+    ]
+    not_login_markers = [
+        "您还没有登录",
+        "您还没有登录或注册",
+        "请先登录",
+    ]
+
+    if any(x in text for x in not_login_markers):
+        print(f"[DrissionPage] ❌ {label}: 未登录或 Cookie 失效")
+        return False, text_short
+
+    if status == 200 and any(x in text for x in ok_markers):
+        print(f"[DrissionPage] ✅ {label}: {text_short or 'success'}")
+        return True, text_short or "success"
+
+    if status == 200 and any(x in text for x in neutral_markers):
+        print(f"[DrissionPage] ℹ️ {label}: {text_short}")
+        return True, text_short
+
+    print(f"[DrissionPage] ⚠️ {label}: HTTP {status}, {text_short or '空响应'}")
+    return False, text_short or f"HTTP {status}"
+
+
+def task_click_fallback(browser, selectors, label: str) -> bool:
+    """Ajax 失败时使用页面按钮兜底。"""
+    ok = click_first(browser, selectors, label, timeout=2)
+    if ok:
+        time.sleep(1.5)
+        wait_for_cloudflare(browser, max_wait=15)
+    return ok
+
+
+def solve_login_captcha(browser) -> bool:
+    """识别并填写 SouthPlus 登录页 gdcode 验证码。"""
+    try:
+        has_input = browser.run_js('return !!document.querySelector("input[name=gdcode]");')
+        if not has_input:
+            return True
+
+        try:
+            import ddddocr
+        except ImportError:
+            print("[DrissionPage] ❌ 登录页需要验证码，请安装 ddddocr")
+            return False
+
+        ocr_engines = [ddddocr.DdddOcr(show_ad=False)]
+        try:
+            ocr_engines.append(ddddocr.DdddOcr(beta=True, show_ad=False))
+        except Exception:
+            pass
+
+        for attempt in range(3):
+            img_b64 = browser.run_js(f'''
+            var input = document.querySelector('input[name="gdcode"]');
+            var img = document.querySelector('#ckcode') || document.querySelector('img[src*="ck.php"]');
+            if (!input || !img) return null;
+            try {{
+                img.style.display = 'inline';
+                img.style.visibility = 'visible';
+                img.src = 'ck.php?' + Date.now() + '{attempt}';
+            }} catch(e) {{}}
+            return 'loading';
+            ''')
+            if not img_b64:
+                return True
+
+            time.sleep(1.2)
+            img_b64 = browser.run_js('''
+            var img = document.querySelector('#ckcode') || document.querySelector('img[src*="ck.php"]');
+            if (!img || !img.complete || !img.naturalWidth) return null;
+            var c = document.createElement('canvas');
+            c.width = img.naturalWidth;
+            c.height = img.naturalHeight;
+            var ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            return c.toDataURL('image/png').split(',')[1];
+            ''')
+            if not img_b64:
+                continue
+
+            import base64
+            img_bytes = base64.b64decode(img_b64)
+            variants = build_captcha_variants(img_bytes)
+            candidates = []
+            for variant_name, variant_bytes in variants:
+                if os.getenv("SOUTHPLUS_DEBUG", "false").lower() == "true":
+                    try:
+                        with open(f"south_captcha_{attempt}_{variant_name}.png", "wb") as f:
+                            f.write(variant_bytes)
+                    except Exception:
+                        pass
+                for engine in ocr_engines:
+                    try:
+                        text = engine.classification(variant_bytes)
+                    except Exception:
+                        continue
+                    code = re.sub(r'[^0-9A-Za-z]', '', text or '').strip()
+                    if 4 <= len(code) <= 6:
+                        candidates.append(code)
+
+            candidates = sorted(set(candidates), key=lambda x: (abs(len(x) - 5), -len(x), x))
+            print(f"[DrissionPage] 验证码候选: {', '.join(candidates) if candidates else '空'}")
+            if not candidates:
+                continue
+            code = candidates[0]
+
+            filled = browser.run_js(f'''
+            var input = document.querySelector('input[name="gdcode"]');
+            if (!input) return false;
+            input.focus();
+            input.value = {json.dumps(code)};
+            input.dispatchEvent(new Event('input', {{bubbles: true}}));
+            input.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return true;
+            ''')
+            if filled:
+                return True
+        return False
+    except Exception as e:
+        print(f"[DrissionPage] ❌ 验证码处理失败: {e}")
+        return False
+
+
+def build_captcha_variants(img_bytes: bytes):
+    """生成适合 SouthPlus 浅色文字验证码的 OCR 预处理图。"""
+    variants = [("raw", img_bytes)]
+    try:
+        from PIL import Image, ImageEnhance, ImageOps
+        import io
+
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        for scale in (2, 3):
+            gray = ImageOps.grayscale(img).resize(
+                (img.width * scale, img.height * scale),
+                Image.Resampling.LANCZOS,
+            )
+            gray = ImageEnhance.Contrast(gray).enhance(2.8)
+            gray = ImageEnhance.Sharpness(gray).enhance(2.0)
+            buf = io.BytesIO()
+            gray.save(buf, format="PNG")
+            variants.append((f"gray{scale}", buf.getvalue()))
+
+        for delta in (10, 16, 22):
+            out = Image.new("L", img.size, 255)
+            src = img.load()
+            dst = out.load()
+            for y in range(img.height):
+                for x in range(img.width):
+                    r, g, b = src[x, y]
+                    mx = max(r, g, b)
+                    mn = min(r, g, b)
+                    if mx > 125 and (mx - mn) < delta:
+                        dst[x, y] = 0
+            out = out.resize((img.width * 3, img.height * 3), Image.Resampling.NEAREST)
+            buf = io.BytesIO()
+            out.save(buf, format="PNG")
+            variants.append((f"mask{delta}", buf.getvalue()))
+    except Exception as e:
+        print(f"[DrissionPage] 验证码预处理失败: {e}")
+    return variants
 
 
 def login_with_password(browser, site_base: str, username: str, password: str) -> bool:
     """使用账号密码登录"""
     try:
-        # 访问登录页面
         login_url = f"{site_base}/login.php"
-        print(f"[DrissionPage] 访问登录页面: {login_url}")
-        browser.get(login_url)
-        time.sleep(2)
-        
-        # 等待 Cloudflare
-        wait_for_cloudflare(browser)
-        time.sleep(1)
-        
-        # 查找用户名输入框
-        username_input = browser.ele('name:pwuser', timeout=5)
-        if not username_input:
-            # 尝试其他选择器
-            username_input = browser.ele('xpath://input[@name="pwuser"]', timeout=3)
-        if not username_input:
-            username_input = browser.ele('xpath://input[@type="text"]', timeout=3)
-        
-        if not username_input:
-            print("[DrissionPage] ❌ 未找到用户名输入框")
-            return False
-        
-        # 查找密码输入框
-        password_input = browser.ele('name:pwpwd', timeout=5)
-        if not password_input:
-            password_input = browser.ele('xpath://input[@name="pwpwd"]', timeout=3)
-        if not password_input:
-            password_input = browser.ele('xpath://input[@type="password"]', timeout=3)
-        
-        if not password_input:
-            print("[DrissionPage] ❌ 未找到密码输入框")
-            return False
-        
-        # 输入用户名和密码
-        print(f"[DrissionPage] 输入用户名: {username}")
-        username_input.clear()
-        username_input.input(username)
-        time.sleep(0.5)
-        
-        print("[DrissionPage] 输入密码: ******")
-        password_input.clear()
-        password_input.input(password)
-        time.sleep(0.5)
-        
-        # 查找登录按钮
-        login_btn = browser.ele('xpath://input[@type="submit"]', timeout=3)
-        if not login_btn:
-            login_btn = browser.ele('xpath://button[@type="submit"]', timeout=3)
-        if not login_btn:
-            login_btn = browser.ele('xpath://input[contains(@value, "登录") or contains(@value, "登錄")]', timeout=3)
-        
-        if not login_btn:
-            print("[DrissionPage] ❌ 未找到登录按钮")
-            return False
-        
-        # 点击登录
-        print("[DrissionPage] 点击登录按钮")
-        login_btn.click()
-        time.sleep(3)
-        
-        # 检查登录是否成功
-        html = browser.html
-        if "您还没有登录" in html or "您还没有登录或注册" in html:
-            print("[DrissionPage] ❌ 登录失败：仍显示未登录状态")
-            return False
-        
-        if "密码错误" in html or "用户名不存在" in html or "登录失败" in html:
-            print("[DrissionPage] ❌ 登录失败：用户名或密码错误")
-            return False
-        
-        print("[DrissionPage] ✅ 登录成功")
-        return True
+        for attempt in range(1, 4):
+            print(f"[DrissionPage] 访问登录页面: {login_url} (尝试 {attempt}/3)")
+            browser.get(login_url)
+            time.sleep(2)
+
+            if not wait_for_cloudflare(browser):
+                return False
+            time.sleep(1)
+
+            form_result = browser.run_js(f'''
+            var username = {json.dumps(username)};
+            var password = {json.dumps(password)};
+            function visible(el) {{
+                if (!el) return false;
+                var r = el.getBoundingClientRect();
+                var s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+            }}
+            function pick(list) {{
+                for (var i = 0; i < list.length; i++) {{
+                    var nodes = Array.from(document.querySelectorAll(list[i]));
+                    var found = nodes.find(visible) || nodes[0];
+                    if (found) return found;
+                }}
+                return null;
+            }}
+            function setValue(el, value) {{
+                el.focus();
+                var setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+                if (setter && setter.set) setter.set.call(el, value);
+                else el.value = value;
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            }}
+            var userEl = pick(['input[name="pwuser"]', '#pwuser', 'input[type="text"]']);
+            var passEl = pick(['input[name="pwpwd"]', 'input[type="password"]']);
+            var form = (passEl && passEl.form) || (userEl && userEl.form) || document.querySelector('form[name="login"], form[name="login_FORM"], form[action*="login.php"]');
+            if (!userEl || !passEl || !form) {{
+                return {{
+                    ok: false,
+                    title: document.title,
+                    text: (document.body && document.body.innerText || '').slice(0, 300),
+                    inputs: Array.from(document.querySelectorAll('input')).slice(0, 20).map(function(el) {{
+                        return {{type: el.type || '', name: el.name || '', id: el.id || '', value: el.value || '', visible: visible(el)}};
+                    }})
+                }};
+            }}
+            setValue(userEl, username);
+            setValue(passEl, password);
+            return {{ok: true}};
+            ''')
+
+            if not isinstance(form_result, dict) or not form_result.get("ok"):
+                print(f"[DrissionPage] ❌ 未找到登录表单: {json.dumps(form_result, ensure_ascii=False)[:800]}")
+                save_debug_html(browser, "south_login_debug.html")
+                return False
+
+            if not solve_login_captcha(browser):
+                print("[DrissionPage] ❌ 验证码识别失败")
+                continue
+
+            print("[DrissionPage] 点击登录按钮")
+            submitted = browser.run_js('''
+            var btn = Array.from(document.querySelectorAll('input[type="submit"], button[type="submit"], .btn'))
+                .find(function(el) {
+                    var r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                });
+            if (btn) { btn.click(); return 'clicked'; }
+            var form = document.querySelector('form[name="login"], form[name="login_FORM"], form[action*="login.php"]');
+            if (form) { form.submit(); return 'submitted'; }
+            return 'no_submit';
+            ''')
+            print(f"[DrissionPage] 登录提交结果: {submitted}")
+            time.sleep(3)
+
+            wait_for_cloudflare(browser)
+            html = browser.html
+            text = page_text(browser)
+            if "认证码不正确" in text or "认证码不正确" in html or "验证码" in text and "不正确" in text:
+                print("[DrissionPage] 验证码不正确，重试...")
+                save_debug_html(browser, f"south_login_captcha_retry_{attempt}.html")
+                continue
+            if is_not_logged_in(browser):
+                print("[DrissionPage] ❌ 登录失败：仍显示未登录状态")
+                save_debug_html(browser, "south_login_failed.html")
+                return False
+
+            if "密码错误" in html or "用户名不存在" in html or "登录失败" in html or "非法请求" in html:
+                print("[DrissionPage] ❌ 登录失败：用户名或密码错误")
+                return False
+
+            print("[DrissionPage] ✅ 登录成功")
+            return True
+
+        print("[DrissionPage] ❌ 登录失败：验证码多次识别失败。建议改用 SOUTHPLUS_COOKIE / COOKIE 模式运行。")
+        return False
     
     except Exception as e:
         print(f"[DrissionPage] ❌ 登录过程出错: {e}")
@@ -301,7 +672,8 @@ def run_with_login(site_base: str) -> str:
         time.sleep(2)
         
         # 等待 Cloudflare
-        wait_for_cloudflare(browser)
+        if not wait_for_cloudflare(browser):
+            return "❌ Cloudflare 验证超时，未进入首页"
         
         # 登录
         if not login_with_password(browser, site_base, SOUTHPLUS_USERNAME, SOUTHPLUS_PASSWORD):
@@ -326,18 +698,20 @@ def do_task(browser, site_base: str) -> str:
     log_lines = []
     
     # 任务页面 URL
-    task_url = f"{site_base}/plugin.php?H_name-tasks.html.html"
+    task_url = f"{site_base}/plugin.php?H_name-tasks.html"
     
     print(f"[DrissionPage] 访问任务页面: {task_url}")
     browser.get(task_url)
     time.sleep(3)
     
     # 等待 Cloudflare
-    wait_for_cloudflare(browser)
+    if not wait_for_cloudflare(browser):
+        return "❌ Cloudflare 验证超时，未进入任务页面"
     time.sleep(2)
     
     # 检查登录状态
-    if "您还没有登录" in browser.html or "您还没有登录或注册" in browser.html:
+    if is_not_logged_in(browser):
+        save_debug_html(browser, "south_not_login.html")
         return "❌ Cookie 无效或已过期：站点返回未登录"
     
     # ===== 步骤1: 申请任务 =====
@@ -346,100 +720,62 @@ def do_task(browser, site_base: str) -> str:
     # 查找可申请的任务 (p_14=周常, p_15=日常)
     apply_count = 0
     
-    # 尝试点击日常任务 (p_15)
-    try:
-        daily_task = browser.ele('#p_15 a img', timeout=2)
-        if daily_task:
-            daily_task.click()
-            print("[DrissionPage] ✅ 日常任务申请成功")
-            log_lines.append("   ✅ 日常任务申请成功")
-            apply_count += 1
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 日常任务申请: {e}")
+    ok, _ = task_ajax(browser, "job", "15", "日常任务申请")
+    if ok or task_click_fallback(browser, ['#p_15 a img', '#p_15 a', 'xpath://*[@id="p_15"]//a'], "日常任务申请"):
+        log_lines.append("   ✅ 日常任务已申请/已点击")
+        apply_count += 1
+    else:
         log_lines.append("   日常任务暂不可申请或已申请")
     
-    # 尝试点击周常任务 (p_14)
-    try:
-        weekly_task = browser.ele('#p_14 a img', timeout=2)
-        if weekly_task:
-            weekly_task.click()
-            print("[DrissionPage] ✅ 周常任务申请成功")
-            log_lines.append("   ✅ 周常任务申请成功")
-            apply_count += 1
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 周常任务申请: {e}")
+    ok, _ = task_ajax(browser, "job", "14", "周常任务申请")
+    if ok or task_click_fallback(browser, ['#p_14 a img', '#p_14 a', 'xpath://*[@id="p_14"]//a'], "周常任务申请"):
+        log_lines.append("   ✅ 周常任务已申请/已点击")
+        apply_count += 1
+    else:
         log_lines.append("   周常任务暂不可申请或已申请")
     
     # ===== 步骤2: 完成任务 =====
     log_lines.append("📋 步骤2: 完成任务")
     
     # 切换到进行中的任务
-    try:
-        in_progress_tab = browser.ele('xpath://*[@id="main"]/table/tbody/tr/td[1]/div[2]/table/tbody/tr[3]/td', timeout=3)
-        if in_progress_tab:
-            in_progress_tab.click()
-            print("[DrissionPage] 切换到进行中任务")
-            time.sleep(2)
-    except Exception as e:
-        print(f"[DrissionPage] 切换任务标签: {e}")
+    in_progress_url = f"{site_base}/plugin.php?H_name-tasks-actions-newtasks.html"
+    browser.get(in_progress_url)
+    time.sleep(2)
+    wait_for_cloudflare(browser)
     
-    # 完成日常任务 (both_15)
-    try:
-        daily_complete = browser.ele('#both_15 a img', timeout=2)
-        if daily_complete:
-            daily_complete.click()
-            print("[DrissionPage] ✅ 日常任务完成")
-            log_lines.append("   ✅ 日常任务完成")
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 日常任务完成: {e}")
+    ok, _ = task_ajax(browser, "job2", "15", "日常任务完成")
+    if ok or task_click_fallback(browser, ['#both_15 a img', '#both_15 a', 'xpath://*[@id="both_15"]//a'], "日常任务完成"):
+        log_lines.append("   ✅ 日常任务已完成/已点击")
+    else:
         log_lines.append("   日常任务暂不可完成")
     
-    # 完成周常任务 (both_14)
-    try:
-        weekly_complete = browser.ele('#both_14 a img', timeout=2)
-        if weekly_complete:
-            weekly_complete.click()
-            print("[DrissionPage] ✅ 周常任务完成")
-            log_lines.append("   ✅ 周常任务完成")
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 周常任务完成: {e}")
+    ok, _ = task_ajax(browser, "job2", "14", "周常任务完成")
+    if ok or task_click_fallback(browser, ['#both_14 a img', '#both_14 a', 'xpath://*[@id="both_14"]//a'], "周常任务完成"):
+        log_lines.append("   ✅ 周常任务已完成/已点击")
+    else:
         log_lines.append("   周常任务暂不可完成")
     
     # ===== 步骤3: 领取奖励 =====
     log_lines.append("📋 步骤3: 领取奖励")
     
     # 访问已完成任务页面
-    finished_url = f"{site_base}/plugin.php?H_name-tasks-actions-endtasks.html.html"
+    finished_url = f"{site_base}/plugin.php?H_name-tasks-actions-endtasks.html"
     browser.get(finished_url)
     time.sleep(2)
+    wait_for_cloudflare(browser)
     
-    # 领取日常奖励
-    try:
-        daily_reward = browser.ele('#both_15 a img', timeout=2)
-        if daily_reward:
-            daily_reward.click()
-            print("[DrissionPage] ✅ 日常奖励领取成功")
-            log_lines.append("   ✅ 日常奖励领取成功")
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 日常奖励领取: {e}")
-        log_lines.append("   日常奖励暂不可领取")
+    if is_not_logged_in(browser):
+        return "❌ Cookie 无效或已过期：领取页面返回未登录"
+
+    if task_click_fallback(browser, ['#both_15 a img', '#both_15 a', 'xpath://*[@id="both_15"]//a'], "日常奖励领取"):
+        log_lines.append("   ✅ 日常奖励已领取/已点击")
+    else:
+        log_lines.append("   日常奖励无单独领取按钮，通常已在完成任务时结算")
     
-    # 领取周常奖励
-    try:
-        weekly_reward = browser.ele('#both_14 a img', timeout=2)
-        if weekly_reward:
-            weekly_reward.click()
-            print("[DrissionPage] ✅ 周常奖励领取成功")
-            log_lines.append("   ✅ 周常奖励领取成功")
-            time.sleep(1)
-    except Exception as e:
-        print(f"[DrissionPage] 周常奖励领取: {e}")
-        log_lines.append("   周常奖励暂不可领取")
+    if task_click_fallback(browser, ['#both_14 a img', '#both_14 a', 'xpath://*[@id="both_14"]//a'], "周常奖励领取"):
+        log_lines.append("   ✅ 周常奖励已领取/已点击")
+    else:
+        log_lines.append("   周常奖励无单独领取按钮，通常已在完成任务时结算")
     
     return "\n".join(log_lines)
 
@@ -456,14 +792,14 @@ def run_for_cookie_json(cookie_list: list, site_base: str) -> str:
         time.sleep(2)
         
         # 等待 Cloudflare
-        wait_for_cloudflare(browser)
+        if not wait_for_cloudflare(browser):
+            return "❌ Cloudflare 验证超时，未进入首页"
         
         # 添加 cookies（Selenium 风格）
         print(f"[DrissionPage] 设置 {len(cookie_list)} 个 Cookie...")
         for cookie in cookie_list:
             try:
-                # DrissionPage 使用 set.cookies 方法
-                browser.set.cookies(cookie)
+                add_cookie(browser, cookie, site_base)
             except Exception as e:
                 print(f"[DrissionPage] 设置 cookie 失败: {e}")
         
@@ -497,22 +833,15 @@ def run_for_cookie_string(cookie_str: str, site_base: str) -> str:
         time.sleep(2)
         
         # 等待 Cloudflare
-        wait_for_cloudflare(browser)
+        if not wait_for_cloudflare(browser):
+            return "❌ Cloudflare 验证超时，未进入首页"
         
         # 设置 cookies
         print("[DrissionPage] 设置 Cookie...")
-        for item in cookie_str.split(';'):
-            item = item.strip()
-            if '=' in item:
-                name, value = item.split('=', 1)
-                name = name.strip()
-                value = value.strip()
-                if name and value:
-                    try:
-                        # 使用字典格式设置 cookie
-                        browser.set.cookies({'name': name, 'value': value})
-                    except Exception as e:
-                        print(f"[DrissionPage] 设置 cookie {name} 失败: {e}")
+        try:
+            add_cookie(browser, cookie_str, site_base)
+        except Exception as e:
+            print(f"[DrissionPage] 设置 Cookie 失败: {e}")
         
         # 刷新页面使 cookie 生效
         browser.refresh()
@@ -587,7 +916,7 @@ def main():
 if __name__ == "__main__":
     print(f"==== SouthPlus 签到开始 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
     
-    if random_signin:
+    if random_signin and max_random_delay > 0:
         delay_seconds = random.randint(0, max_random_delay)
         if delay_seconds > 0:
             signin_time = datetime.now() + timedelta(seconds=delay_seconds)
@@ -596,6 +925,7 @@ if __name__ == "__main__":
             wait_with_countdown(delay_seconds)
     
     print("----------SouthPlus 开始签到----------")
-    main()
+    result = main()
     print("----------SouthPlus 签到完毕----------")
     print(f"==== SouthPlus 签到完成 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
+    sys.exit(1 if result and "❌" in result else 0)

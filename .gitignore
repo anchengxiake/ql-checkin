@@ -1,0 +1,11 @@
+.env
+.codex-venv/
+__pycache__/
+*.pyc
+
+# Runtime debug files
+south_captcha_*.png
+south_login_*.html
+south_fetch_*.html
+south_not_login.html
+captcha_*.png

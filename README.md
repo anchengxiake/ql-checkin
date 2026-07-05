@@ -148,6 +148,10 @@ IKUUU_PASSWD=password1,password2
 Cookie 模式：
 
 ```bash
+# 推荐使用专用变量，避免和其它脚本的 COOKIE 冲突
+SOUTHPLUS_COOKIE=your_cookie
+
+# 兼容旧变量
 COOKIE=your_cookie
 ```
 
@@ -156,14 +160,20 @@ COOKIE=your_cookie
 ```bash
 SOUTHPLUS_USERNAME=username
 SOUTHPLUS_PASSWORD=password
-SOUTHPLUS_SITE=https://south-plus.net
+SOUTHPLUS_SITE=https://www.south-plus.net
 ```
+
+账号密码模式可能触发站点图形验证码；验证码识别不稳定时，建议改用 `SOUTHPLUS_COOKIE`。
+南+登录 Cookie 可能和浏览器 User-Agent 绑定；如果 Cookie 来自浏览器开发者工具，请保持 `SOUTHPLUS_USER_AGENT` 和导出 Cookie 时的 User-Agent 一致。
 
 浏览器相关：
 
 ```bash
 DRISSIONPAGE_HEADLESS=true
 DRISSIONPAGE_CHROME_PATH=/usr/bin/chromium
+SOUTHPLUS_USER_AGENT=Mozilla/5.0 ...
+SOUTHPLUS_CF_WAIT=60
+SOUTHPLUS_DEBUG=false
 ```
 
 ### Microsoft Rewards
