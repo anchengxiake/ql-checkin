@@ -127,9 +127,16 @@ refresh_token_2
 # 百度网盘，多账号用换行分隔
 BAIDU_COOKIE=BAIDUID=xxx; BDUSS=xxx; ...
 
-# 天翼云盘，账号和密码数量需要一致
+# 天翼云盘，账号和密码数量需要一致，支持 & 或换行分隔
 TY_USERNAME=username1&username2
 TY_PASSWORD=password1&password2
+
+# 如果沿用部分上游文档里的 TY_PASSWD，脚本也会兼容
+TY_PASSWD=password1&password2
+
+# 天翼云盘关闭随机延迟，二选一即可
+RANDOM_SIGNIN=false
+MAX_RANDOM_DELAY=0
 
 # 移动云盘，多账号用 @ 或换行分隔
 ydyp_ck=cookie1

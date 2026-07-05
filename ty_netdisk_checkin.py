@@ -19,6 +19,25 @@ import random
 import os
 from datetime import datetime, timedelta
 
+def env_int(name, default):
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"⚠️  环境变量 {name}={value!r} 不是整数，使用默认值 {default}")
+        return default
+
+
+def env_bool(name, default):
+    value = os.getenv(name, "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
+
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
 send = None
@@ -30,8 +49,8 @@ except ImportError:
     print("⚠️  未加载通知模块，跳过通知功能")
 
 # 随机延迟配置
-max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
-random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
+max_random_delay = env_int("MAX_RANDOM_DELAY", 3600)
+random_signin = env_bool("RANDOM_SIGNIN", True)
 
 def format_time_remaining(seconds):
     """格式化时间显示"""
@@ -77,6 +96,26 @@ def notify_user(title, content):
         print(f"📢 {title}")
         print(f"📄 {content}")
 
+def mask_account(account):
+    """隐藏账号中间部分，避免通知泄漏完整手机号。"""
+    account = str(account)
+    if len(account) <= 6:
+        return account[0:1] + "***"
+    return account[:3] + "****" + account[-4:]
+
+
+def parse_accounts():
+    """读取账号配置，按 ql-script-hub 的 TY_USERNAME/TY_PASSWORD 规则解析。"""
+    ty_username_env = os.getenv("TY_USERNAME", "")
+    ty_password_env = os.getenv("TY_PASSWORD") or os.getenv("TY_PASSWD", "")
+    usernames = [u.strip() for u in re.split(r"[&\n]", ty_username_env) if u.strip()]
+    passwords = [p.strip() for p in re.split(r"[&\n]", ty_password_env) if p.strip()]
+    if usernames or passwords:
+        if len(usernames) != len(passwords):
+            raise ValueError("用户名和密码数量不匹配")
+        return list(zip(usernames, passwords))
+    return []
+
 # 常量定义
 BI_RM = list("0123456789abcdefghijklmnopqrstuvwxyz")
 B64MAP = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -87,6 +126,11 @@ class TianYiYunPan:
         self.password = password
         self.index = index
         self.session = requests.Session()
+        self.session_key = ""
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+            "Accept": "application/json;charset=UTF-8",
+        })
         
     def int2char(self, a):
         return BI_RM[a]
@@ -125,75 +169,158 @@ class TianYiYunPan:
         result = self.b64tohex((base64.b64encode(rsa.encrypt(f'{string}'.encode(), pubkey))).decode())
         return result
 
+    def parse_login_error(self, result):
+        message = result.get("msg") or result.get("resultMsg") or result.get("errorMsg") or json.dumps(result, ensure_ascii=False)
+        if any(keyword in message for keyword in ("设备", "二次", "验证", "Device", "captcha")):
+            return f"{message}；可能需要关闭天翼云盘设备锁/二次设备校验后重试"
+        return message
+
     def login(self):
-        """登录天翼云盘"""
+        """登录天翼云盘：兼容 agluo/ql-script-hub 的 2026 新版 wap 登录页。"""
         try:
-            print(f"👤 账号{self.index}: 开始登录 {self.username}")
-            
-            # 获取登录页面
+            import json
+            import urllib.parse
+
+            print(f"👤 账号{self.index}: 开始登录 {mask_account(self.username)}")
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            }
+            self.session.headers.update(headers)
+
+            def add_param(url, key, value):
+                if key + "=" in url:
+                    return url
+                sep = "&" if "?" in url else "?"
+                return url + sep + key + "=" + urllib.parse.quote(str(value))
+
+            def parse_json_or_jsonp(resp_text):
+                txt = resp_text.strip()
+                if txt.startswith("callbackMsg("):
+                    txt = txt[len("callbackMsg("):]
+                    if txt.endswith(");"):
+                        txt = txt[:-2]
+                    elif txt.endswith(")"):
+                        txt = txt[:-1]
+                return json.loads(txt)
+
             urlToken = "https://m.cloud.189.cn/udb/udb_login.jsp?pageId=1&pageKey=default&clientType=wap&redirectURL=https://m.cloud.189.cn/zhuanti/2021/shakeLottery/index.html"
-            r = self.session.get(urlToken, timeout=15)
-            
-            # 提取重定向URL
-            pattern = r"https?://[^\s'\"]+"
-            match = re.search(pattern, r.text)
+            r = self.session.get(urlToken, headers=headers, timeout=15)
+
+            match = re.search(r"https?://[^\s'\"]+", r.text)
             if not match:
                 raise Exception("获取登录URL失败")
-            
-            url = match.group()
-            r = self.session.get(url, timeout=15)
-            
-            # 提取登录链接
-            pattern = r"<a id=\"j-tab-login-link\"[^>]*href=\"([^\"]+)\""
-            match = re.search(pattern, r.text)
-            if not match:
-                raise Exception("获取登录链接失败")
-            
-            href = match.group(1)
-            r = self.session.get(href, timeout=15)
-            
-            # 提取登录参数
-            captchaToken = re.findall(r"captchaToken' value='(.+?)'", r.text)[0]
-            lt = re.findall(r'lt = "(.+?)"', r.text)[0]
-            returnUrl = re.findall(r"returnUrl= '(.+?)'", r.text)[0]
-            paramId = re.findall(r'paramId = "(.+?)"', r.text)[0]
-            j_rsakey = re.findall(r'j_rsaKey" value="(\S+)"', r.text, re.M)[0]
-            
+
+            auto_url = match.group()
+            r = self.session.get(auto_url, headers={**headers, "Referer": urlToken}, timeout=15)
+
+            if "/index.html" in r.url:
+                login_page_url = r.url.replace("/index.html", "/login.html")
+            else:
+                login_page_url = r.url
+
+            login_page_url = add_param(login_page_url, "protocol", "https")
+            login_page_url = add_param(login_page_url, "showback", "true")
+
+            r = self.session.get(
+                login_page_url,
+                headers={**headers, "Referer": auto_url},
+                timeout=15,
+            )
+
+            if "j_rsaKey" not in r.text:
+                debug_path = "/tmp/189_login_page_error.html"
+                try:
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(r.text)
+                    raise Exception(f"获取账号密码登录页失败，页面已保存到 {debug_path}")
+                except OSError:
+                    raise Exception("获取账号密码登录页失败")
+
+            key_match = re.search(r'id=["\']j_rsaKey["\'][^>]*value=["\']([^"\']+)["\']', r.text)
+            if not key_match:
+                raise Exception("提取 j_rsaKey 失败")
+
+            j_rsakey = key_match.group(1)
+            query = urllib.parse.urlsplit(r.url).query
+            conf_url = "https://open.e.189.cn/api/logbox/oauth2/wap/appConf.do?" + query
+
+            rc = self.session.post(
+                conf_url,
+                headers={**headers, "Referer": r.url},
+                timeout=15,
+            )
+
+            conf = rc.json()
+            if str(conf.get("result")) != "0":
+                raise Exception(f"appConf 获取失败: {conf.get('msg', conf)}")
+
+            data_conf = conf.get("data") or {}
+            appKey = data_conf.get("appKey", "cloud")
+            accountType = data_conf.get("accountType", "02")
+            paramId = data_conf.get("paramId", "")
+            lt = data_conf.get("lt", "")
+            reqId = data_conf.get("reqId", "")
+            state = data_conf.get("state", "")
+            isOauth2 = str(data_conf.get("isOauth2", True)).lower()
+            returnUrl = urllib.parse.quote(data_conf.get("returnUrl", ""), safe="")
+
+            if not paramId or not lt or not reqId or not returnUrl:
+                raise Exception("appConf 关键参数不完整")
+
             self.session.headers.update({"lt": lt})
 
+            username_plain = self.username
+            if str(data_conf.get("hasAt", "false")).lower() == "true" and "@" not in username_plain:
+                username_plain = username_plain + "@189.cn"
+
             # RSA加密用户名和密码
-            username_encrypted = self.rsa_encode(j_rsakey, self.username)
+            username_encrypted = self.rsa_encode(j_rsakey, username_plain)
             password_encrypted = self.rsa_encode(j_rsakey, self.password)
             
             # 登录请求
             login_url = "https://open.e.189.cn/api/logbox/oauth2/loginSubmit.do"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:74.0) Gecko/20100101 Firefox/76.0',
-                'Referer': 'https://open.e.189.cn/',
-            }
-            data = {
-                "appKey": "cloud",
-                "accountType": '01',
-                "userName": f"{{RSA}}{username_encrypted}",
-                "password": f"{{RSA}}{password_encrypted}",
-                "validateCode": "",
-                "captchaToken": captchaToken,
+            params = {
+                "apptype": "wap",
+                "appKey": appKey,
+                "accountType": accountType,
+                "dynamicCheck": "false",
+                "userName": "{RSA}" + username_encrypted,
+                "epd": "{RSA}" + password_encrypted,
+                "version": "v2.0",
                 "returnUrl": returnUrl,
-                "mailSuffix": "@189.cn",
-                "paramId": paramId
+                "isConfigurable": "true",
+                "isOauth2": isOauth2,
+                "state": state,
+                "paramId": paramId,
+                "lt": lt,
+                "REQID": reqId,
+                "callbackMsg": "callbackMsg",
             }
             
-            r = self.session.post(login_url, data=data, headers=headers, timeout=15)
-            result = r.json()
+            r = self.session.get(
+                login_url,
+                params=params,
+                headers={**headers, "Referer": r.url, "Accept": "*/*"},
+                timeout=15,
+            )
+
+            try:
+                result = r.json()
+            except Exception:
+                result = parse_json_or_jsonp(r.text)
             
-            if result['result'] == 0:
+            if str(result.get("result")) == "0":
                 print(f"✅ 账号{self.index}: 登录成功")
-                redirect_url = result['toUrl']
-                self.session.get(redirect_url, timeout=15)
+                redirect_url = result.get("toUrl")
+                if redirect_url:
+                    self.session.get(redirect_url, headers=headers, timeout=15)
                 return True
-            else:
-                print(f"❌ 账号{self.index}: 登录失败 - {result['msg']}")
-                return False
+
+            print(f"❌ 账号{self.index}: 登录失败 - {self.parse_login_error(result)}")
+            return False
                 
         except Exception as e:
             print(f"❌ 账号{self.index}: 登录异常 - {str(e)}")
@@ -216,11 +343,13 @@ class TianYiYunPan:
             
             response = self.session.get(sign_url, headers=headers, timeout=15)
             result = response.json()
+            if result.get("errorCode") or result.get("errorMsg"):
+                raise Exception(result.get("errorMsg") or json.dumps(result, ensure_ascii=False))
             
             netdiskBonus = result.get('netdiskBonus', 0)
             isSign = result.get('isSign', 'true')
             
-            if isSign == "false":
+            if str(isSign).lower() == "false" or isSign is False:
                 status_msg = f"✅ 签到成功，获得 {netdiskBonus}M 空间"
                 print(f"✅ 账号{self.index}: {status_msg}")
             else:
@@ -242,7 +371,7 @@ class TianYiYunPan:
             
             # 登录
             if not self.login():
-                error_msg = f"❌ 账号{self.index}: {self.username}\n登录失败，无法完成签到"
+                error_msg = f"❌ 账号{self.index}: {mask_account(self.username)}\n登录失败，无法完成签到"
                 print(error_msg)
                 return error_msg, False
             
@@ -252,7 +381,7 @@ class TianYiYunPan:
             # 格式化结果
             result_msg = f"""☁️ 天翼云盘签到结果
 
-👤 账号信息: {self.username}
+👤 账号信息: {mask_account(self.username)}
 📊 签到状态: {sign_result}
 🕐 完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
@@ -274,7 +403,7 @@ def main():
     print(f"==== 天翼云盘签到开始 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
     
     # 随机延迟
-    if random_signin:
+    if random_signin and max_random_delay > 0:
         delay_seconds = random.randint(0, max_random_delay)
         if delay_seconds > 0:
             signin_time = datetime.now() + timedelta(seconds=delay_seconds)
@@ -282,32 +411,26 @@ def main():
             print(f"⏰ 预计开始时间: {signin_time.strftime('%H:%M:%S')}")
             wait_with_countdown(delay_seconds, "天翼云盘签到")
     
-    # 获取环境变量
-    ty_username_env = os.getenv("TY_USERNAME", "")
-    ty_password_env = os.getenv("TY_PASSWORD", "")
-    
-    if not ty_username_env or not ty_password_env:
-        error_msg = "❌ 未找到TY_USERNAME或TY_PASSWORD环境变量"
+    try:
+        accounts = parse_accounts()
+    except Exception as e:
+        error_msg = f"❌ 天翼云盘账号变量解析失败: {e}"
+        print(error_msg)
+        notify_user("天翼云盘签到失败", error_msg)
+        return
+
+    if not accounts:
+        error_msg = "❌ 未找到天翼云盘账号变量，请配置 TY_USERNAME 和 TY_PASSWORD"
         print(error_msg)
         notify_user("天翼云盘签到失败", error_msg)
         return
     
-    # 解析多账号
-    usernames = [u.strip() for u in ty_username_env.split('&') if u.strip()]
-    passwords = [p.strip() for p in ty_password_env.split('&') if p.strip()]
-    
-    if len(usernames) != len(passwords):
-        error_msg = "❌ 用户名和密码数量不匹配"
-        print(error_msg)
-        notify_user("天翼云盘签到失败", error_msg)
-        return
-    
-    print(f"📝 共发现 {len(usernames)} 个账号")
+    print(f"📝 共发现 {len(accounts)} 个账号")
     
     success_accounts = 0
     all_results = []
     
-    for index, (username, password) in enumerate(zip(usernames, passwords)):
+    for index, (username, password) in enumerate(accounts):
         try:
             # 账号间随机等待
             if index > 0:
@@ -334,12 +457,12 @@ def main():
             notify_user(f"天翼云盘账号{index + 1}签到失败", error_msg)
     
     # 发送汇总通知
-    if len(usernames) > 1:
+    if len(accounts) > 1:
         summary_msg = f"""☁️ 天翼云盘签到汇总
 
-📊 总计处理: {len(usernames)}个账号
+📊 总计处理: {len(accounts)}个账号
 ✅ 成功账号: {success_accounts}个
-❌ 失败账号: {len(usernames) - success_accounts}个
+❌ 失败账号: {len(accounts) - success_accounts}个
 📅 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 详细结果请查看各账号单独通知"""
