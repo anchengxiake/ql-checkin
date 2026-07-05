@@ -188,6 +188,40 @@ bing_token_2=optional_refresh_token
 
 `bing_ck_1`、`bing_ck_2` 依次递增即可；`bing_token_*` 为可选项，主要用于阅读任务。
 
+兼容变量：
+
+```bash
+MR_COOKIE_1=your_cookie
+BING_COOKIE_1=your_cookie
+ACCOUNT_1_COOKIE=your_cookie
+
+MR_TOKEN_1=optional_refresh_token
+BING_TOKEN_1=optional_refresh_token
+ACCOUNT_1_REFRESH_TOKEN=optional_refresh_token
+```
+
+国内青龙环境推荐：
+
+```bash
+MR_GEO_LOCALE=cn
+MR_LANG_CODE=zh
+MR_BING_HOST=https://cn.bing.com
+MR_QUERY_ENGINES=china,local
+RANDOM_SIGNIN=false
+MAX_RANDOM_DELAY=0
+```
+
+常用调节项：
+
+```bash
+MR_SEARCH_DELAY_MIN=60
+MR_SEARCH_DELAY_MAX=80
+MR_REQUEST_TIMEOUT=15
+MR_HOT_WORDS_MAX_COUNT=30
+MR_PC_USER_AGENT=固定桌面端User-Agent
+MR_MOBILE_USER_AGENT=固定移动端User-Agent
+```
+
 ## 老王论坛说明
 
 青龙面板推荐使用单文件脚本：

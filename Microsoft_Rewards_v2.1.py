@@ -43,6 +43,28 @@ from dataclasses import dataclass
 from functools import wraps
 import traceback
 
+def env_int(name: str, default: int) -> int:
+    """读取整数环境变量，非法时使用默认值。"""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"⚠️  环境变量 {name}={value!r} 不是整数，使用默认值 {default}")
+        return default
+
+
+def env_bool(name: str, default: bool) -> bool:
+    """读取布尔环境变量。"""
+    value = os.getenv(name, "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 # ---------------- 统一通知模块加载 ----------------
 hadsend = False
 send_func = None
@@ -55,8 +77,8 @@ except ImportError:
     print("⚠️  未加载通知模块，跳过通知功能")
 
 # 随机延迟配置（覆盖原有配置）
-max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "1800"))
-random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
+max_random_delay = env_int("MAX_RANDOM_DELAY", 1800)
+random_signin = env_bool("RANDOM_SIGNIN", True)
 
 def format_time_remaining(seconds):
     """格式化时间显示"""
@@ -115,22 +137,22 @@ os.environ["BARK_GROUP"] = BARK_GROUP
 
 # 任务执行配置
 TASK_CONFIG = {
-    'SEARCH_CHECK_INTERVAL': 5,      # 搜索检查间隔次数
-    'SEARCH_DELAY_MIN': 60,          # 搜索延迟最小值（秒）
-    'SEARCH_DELAY_MAX': 80,          # 搜索延迟最大值（秒）
-    'TASK_DELAY_MIN': 2,             # 任务延迟最小值（秒）
-    'TASK_DELAY_MAX': 4,             # 任务延迟最大值（秒）
-    'MAX_RETRIES': 3,                # 最大重试次数
-    'RETRY_DELAY': 2,                # 重试延迟（秒）
-    'REQUEST_TIMEOUT': 15,           # 请求超时时间（秒）
-    'HOT_WORDS_MAX_COUNT': 30,       # 热搜词最大数量
-    'MAX_REPEAT_COUNT': 2,           # 最大重复运行次数
+    'SEARCH_CHECK_INTERVAL': env_int("MR_SEARCH_CHECK_INTERVAL", 5),      # 搜索检查间隔次数
+    'SEARCH_DELAY_MIN': env_int("MR_SEARCH_DELAY_MIN", 60),               # 搜索延迟最小值（秒）
+    'SEARCH_DELAY_MAX': env_int("MR_SEARCH_DELAY_MAX", 80),               # 搜索延迟最大值（秒）
+    'TASK_DELAY_MIN': env_int("MR_TASK_DELAY_MIN", 2),                    # 任务延迟最小值（秒）
+    'TASK_DELAY_MAX': env_int("MR_TASK_DELAY_MAX", 4),                    # 任务延迟最大值（秒）
+    'MAX_RETRIES': env_int("MR_MAX_RETRIES", 3),                          # 最大重试次数
+    'RETRY_DELAY': env_int("MR_RETRY_DELAY", 2),                          # 重试延迟（秒）
+    'REQUEST_TIMEOUT': env_int("MR_REQUEST_TIMEOUT", 15),                 # 请求超时时间（秒）
+    'HOT_WORDS_MAX_COUNT': env_int("MR_HOT_WORDS_MAX_COUNT", 30),         # 热搜词最大数量
+    'MAX_REPEAT_COUNT': env_int("MR_MAX_REPEAT_COUNT", 2),                # 最大重复运行次数
 }
 
 # 缓存配置
 CACHE_CONFIG = {
     'CACHE_FILE': "bing_cache.json",  # 缓存文件名
-    'CACHE_ENABLED': True,            # 是否启用缓存
+    'CACHE_ENABLED': env_bool("MR_CACHE_ENABLED", True),  # 是否启用缓存
 }
 
 # 使用缓存配置
@@ -159,6 +181,10 @@ class Config:
     # API配置
     REQUEST_TIMEOUT: int = TASK_CONFIG['REQUEST_TIMEOUT']
     HOT_WORDS_MAX_COUNT: int = TASK_CONFIG['HOT_WORDS_MAX_COUNT']
+    GEO_LOCALE: str = os.getenv("MR_GEO_LOCALE", os.getenv("ACCOUNT_1_GEO_LOCALE", "cn")).strip().lower() or "cn"
+    LANG_CODE: str = os.getenv("MR_LANG_CODE", os.getenv("ACCOUNT_1_LANG_CODE", "zh")).strip().lower() or "zh"
+    BING_HOST: str = os.getenv("MR_BING_HOST", "").strip()
+    SEARCH_SOURCE_ORDER: List[str] = None
     
     # User-Agent池配置
     PC_USER_AGENTS: List[str] = None
@@ -169,6 +195,14 @@ class Config:
     DEFAULT_HOT_WORDS: List[str] = None
     
     def __post_init__(self):
+        if self.SEARCH_SOURCE_ORDER is None:
+            raw_order = os.getenv("MR_QUERY_ENGINES", "china,local")
+            self.SEARCH_SOURCE_ORDER = [x.strip().lower() for x in raw_order.split(",") if x.strip()]
+
+        if not self.BING_HOST:
+            self.BING_HOST = "https://cn.bing.com" if self.GEO_LOCALE in ("cn", "zh-cn") else "https://www.bing.com"
+        self.BING_HOST = self.BING_HOST.rstrip("/")
+
         if self.HOT_WORDS_APIS is None:
             self.HOT_WORDS_APIS = [
                 ("https://dailyapi.eray.cc/", ["weibo", "douyin", "baidu", "toutiao", "thepaper", "qq-news", "netease-news", "zhihu"]),
@@ -221,12 +255,31 @@ class Config:
     @staticmethod
     def get_random_pc_ua() -> str:
         """获取随机PC端User-Agent"""
+        fixed_ua = os.getenv("MR_PC_USER_AGENT", "").strip()
+        if fixed_ua:
+            return fixed_ua
         return random.choice(config.PC_USER_AGENTS)
     
     @staticmethod
     def get_random_mobile_ua() -> str:
         """获取随机移动端User-Agent"""
+        fixed_ua = os.getenv("MR_MOBILE_USER_AGENT", "").strip()
+        if fixed_ua:
+            return fixed_ua
         return random.choice(config.MOBILE_USER_AGENTS)
+
+    def accept_language(self) -> str:
+        """根据区域配置生成 Accept-Language。"""
+        if self.LANG_CODE.startswith("zh"):
+            return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+        return "en-US,en;q=0.9,zh-CN;q=0.7,zh;q=0.6"
+
+    def bing_search_url(self) -> str:
+        return f"{self.BING_HOST}/search"
+
+    @staticmethod
+    def bing_origin(search_url: str) -> str:
+        return search_url.split('/search')[0]
 
 config = Config()
 
@@ -241,6 +294,14 @@ class AccountInfo:
 
 class AccountManager:
     """账号管理器 - 读取环境变量中的账号配置"""
+
+    @staticmethod
+    def _get_first_env(*names: str) -> str:
+        for name in names:
+            value = os.getenv(name, "").strip()
+            if value:
+                return value
+        return ""
     
     @staticmethod
     def get_accounts() -> List[AccountInfo]:
@@ -252,8 +313,18 @@ class AccountManager:
         max_check_index = 50  # 最大检查到第50个账号
         
         while index <= max_check_index:
-            cookies = os.getenv(f"bing_ck_{index}")
-            refresh_token = os.getenv(f"bing_token_{index}", "")
+            cookies = AccountManager._get_first_env(
+                f"bing_ck_{index}",
+                f"BING_COOKIE_{index}",
+                f"MR_COOKIE_{index}",
+                f"ACCOUNT_{index}_COOKIE",
+            )
+            refresh_token = AccountManager._get_first_env(
+                f"bing_token_{index}",
+                f"BING_TOKEN_{index}",
+                f"MR_TOKEN_{index}",
+                f"ACCOUNT_{index}_REFRESH_TOKEN",
+            )
             
             # 如果既没有cookies也没有refresh_token
             if not cookies and not refresh_token:
@@ -1041,32 +1112,59 @@ class HotWordsManager:
     @retry_on_failure(max_retries=2, delay=1)
     def _fetch_hot_words(self, max_count: int = config.HOT_WORDS_MAX_COUNT) -> List[str]:
         """获取热搜词"""
-        apis_shuffled = config.HOT_WORDS_APIS[:]
-        random.shuffle(apis_shuffled)
-        
-        for base_url, sources in apis_shuffled:
-            sources_shuffled = sources[:]
-            random.shuffle(sources_shuffled)
-            
-            for source in sources_shuffled:
-                api_url = base_url + source
-                try:
-                    resp = requests.get(api_url, timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, dict) and 'data' in data and data['data']:
-                            all_titles = [item.get('title') for item in data['data'] if item.get('title')]
-                            if all_titles:
-                                print_log("热搜词", f"成功获取热搜词 {len(all_titles)} 条，来源: {api_url}")
-                                random.shuffle(all_titles)
-                                return all_titles[:max_count]
-                except Exception:
+        collected = []
+        seen = set()
+
+        def add_words(words: List[str]):
+            for word in words:
+                word = re.sub(r"\s+", " ", str(word or "")).strip()
+                if not word or word in seen:
                     continue
-        
+                seen.add(word)
+                collected.append(word)
+
+        source_order = config.SEARCH_SOURCE_ORDER or ["china", "local"]
+        if "china" in source_order:
+            apis_shuffled = config.HOT_WORDS_APIS[:]
+            random.shuffle(apis_shuffled)
+
+            for base_url, sources in apis_shuffled:
+                sources_shuffled = sources[:]
+                random.shuffle(sources_shuffled)
+
+                for source in sources_shuffled:
+                    api_url = base_url + source
+                    try:
+                        resp = requests.get(api_url, timeout=10)
+                        if resp.status_code == 403:
+                            print_log("热搜词", f"热搜源限流: {api_url}")
+                            time.sleep(random.uniform(1.2, 2.5))
+                            continue
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if isinstance(data, dict) and 'data' in data and data['data']:
+                                titles = [item.get('title') for item in data['data'] if item.get('title')]
+                                if titles:
+                                    add_words(titles)
+                                    print_log("热搜词", f"成功获取热搜词 {len(titles)} 条，来源: {api_url}，累计 {len(collected)} 条")
+                                    if len(collected) >= max_count:
+                                        random.shuffle(collected)
+                                        return collected[:max_count]
+                    except Exception:
+                        continue
+
+        if "local" in source_order or len(collected) < max_count:
+            default_words = config.DEFAULT_HOT_WORDS[:]
+            random.shuffle(default_words)
+            add_words(default_words)
+
+        if collected:
+            random.shuffle(collected)
+            print_log("热搜词", f"最终可用搜索词 {len(collected)} 条")
+            return collected[:max_count]
+
         print_log("热搜词", "全部热搜API失效，使用默认搜索词。")
-        default_words = config.DEFAULT_HOT_WORDS[:max_count]
-        random.shuffle(default_words)
-        return default_words
+        return config.DEFAULT_HOT_WORDS[:max_count]
     
     def get_random_word(self) -> str:
         """获取随机热搜词"""
@@ -1088,7 +1186,7 @@ class RequestManager:
         return {
             "user-agent": config.get_random_pc_ua(),
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "accept-language": config.accept_language(),
             "accept-encoding": "gzip, deflate, br, zstd",
             "sec-ch-ua": '"Not;A=Brand";v="99", "Microsoft Edge";v="139", "Chromium";v="139"',
             "sec-ch-ua-mobile": "?0",
@@ -1109,7 +1207,7 @@ class RequestManager:
         return {
             "user-agent": config.get_random_mobile_ua(),
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "accept-language": config.accept_language(),
             "accept-encoding": "gzip, deflate, br, zstd",
             "sec-ch-ua": '"Not;A=Brand";v="99", "Chromium";v="124"',
             "sec-ch-ua-mobile": "?1",
@@ -1563,13 +1661,13 @@ class RewardsService:
             "User-Agent": config.get_random_pc_ua(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Referer": "https://rewards.bing.com/",
-            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Language": config.accept_language(),
             "Cookie": cookies
         }
 
         try:
             # 第一步：执行搜索
-            search_url = "https://cn.bing.com/search"
+            search_url = config.bing_search_url()
             final_search_url = None
             
             # 发送请求但不自动跟随重定向
@@ -1594,7 +1692,7 @@ class RewardsService:
                     search_response = self.request_manager.make_request('GET', search_url, headers, params)
                     final_search_url = search_url
                 else:
-                    final_search_url = "https://cn.bing.com/search"
+                    final_search_url = search_url
             
             if search_response.status_code != 200:
                 print_log("电脑搜索", f"搜索失败，最终状态码: {search_response.status_code}", account_index)
@@ -1632,7 +1730,7 @@ class RewardsService:
             post_headers = {
                 "User-Agent": headers["User-Agent"],
                 "Accept": "*/*",
-                "Origin": final_search_url.split('/search')[0],  # 提取域名部分
+                "Origin": config.bing_origin(final_search_url),  # 提取域名部分
                 "Referer": full_search_url,
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": cookies
@@ -1670,8 +1768,8 @@ class RewardsService:
             "filters": f'tnTID:"{random_tnTID}" tnVersion:"d1d6d5bcada64df7a0182f7bc3516b45" Segment:"popularnow.carousel" tnCol:"{random_tnCol}" tnScenario:"TrendingTopicsAPI" tnOrder:"4a2117a4-4237-4b9e-85d0-67fef7b5f2be"',
             "ssp": "1",
             "safesearch": "moderate",
-            "setlang": "zh-hans",
-            "cc": "CN",
+            "setlang": "zh-hans" if config.LANG_CODE.startswith("zh") else "en-us",
+            "cc": "CN" if config.GEO_LOCALE in ("cn", "zh-cn") else "US",
             "ensearch": "0",
             "PC": "SANSAAND"
         }
@@ -1682,14 +1780,14 @@ class RewardsService:
             "x-search-market": "zh-CN",
             "upgrade-insecure-requests": "1",
             "accept-encoding": "gzip, deflate",
-            "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "accept-language": config.accept_language(),
             "x-requested-with": "com.microsoft.bing",            
             "cookie": enhanced_cookies
         }
 
         try:
             # 第一步：执行搜索
-            search_url = "https://cn.bing.com/search"
+            search_url = config.bing_search_url()
             final_search_url = None
             final_headers = headers.copy()
             
@@ -1723,7 +1821,7 @@ class RewardsService:
                     search_response = self.request_manager.make_request('GET', search_url, final_headers, params)
                     final_search_url = search_url
                 else:
-                    final_search_url = "https://cn.bing.com/search"
+                    final_search_url = search_url
             
             if search_response.status_code != 200:
                 print_log("移动搜索", f"搜索失败，最终状态码: {search_response.status_code}", account_index)
@@ -2793,7 +2891,7 @@ def main():
     print(f"==== 微软积分签到开始 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
     
     # 随机延迟（整体延迟）
-    if random_signin:
+    if random_signin and max_random_delay > 0:
         delay_seconds = random.randint(0, max_random_delay)
         if delay_seconds > 0:
             print(f"🎲 随机延迟: {format_time_remaining(delay_seconds)}")
