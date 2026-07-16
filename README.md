@@ -205,6 +205,9 @@ cookie2
 | `SOUTHPLUS_USER_AGENT` | 可选 | 浏览器 UA | Cookie 绑定 UA 时填写 |
 | `SOUTHPLUS_CF_WAIT` | 可选 | `60` | Cloudflare 等待秒数 |
 | `SOUTHPLUS_DEBUG` | 可选 | `false` | 调试日志 |
+| `SOUTHPLUS_CAPTCHA_RETRY_LIMIT` | 可选 | `3` | 登录验证码重试次数，`-1` 为无限重试 |
+| `SOUTHPLUS_CAPTCHA_RETRY_BACKOFF` | 可选 | `2` | 验证码失败后的退避秒数基数 |
+| `SOUTHPLUS_CAPTCHA_DEBUG_DIR` | 可选 | 系统临时目录 | 调试图片输出目录 |
 | `DRISSIONPAGE_HEADLESS` | 可选 | `true` | 是否无头浏览器 |
 | `DRISSIONPAGE_CHROME_PATH` | 可选 | `/usr/bin/chromium` | 自定义浏览器路径 |
 
@@ -223,6 +226,8 @@ task laowang_sign_ql.py
 | `LAOWANG_DEBUG` | 可选 | `false` | 调试日志 |
 | `LAOWANG_CF_WAIT` | 可选 | `60` | Cloudflare 等待秒数 |
 | `LAOWANG_USE_SLIDE_MATCH_FALLBACK` | 可选 | `true` | 极少数情况下回退到 `ddddocr.slide_match` |
+| `LAOWANG_SLIDER_RETRY_LIMIT` | 可选 | `8` | 滑块最大尝试次数 |
+| `LAOWANG_SLIDER_RETRY_BACKOFF` | 可选 | `2` | 滑块刷新后的退避秒数基数 |
 
 示例：
 
@@ -370,6 +375,7 @@ python -m py_compile laowang_sign_ql.py
 - 夸克网盘脚本来源和维护参考：[anchengxiake/Quark_Auot_Check_In](https://github.com/anchengxiake/Quark_Auot_Check_In)
 - 移动云盘脚本来源和维护参考：[hlt1995/qlScripts](https://github.com/hlt1995/qlScripts)
 - Microsoft Rewards 脚本来源和维护参考：[chiihero/Microsoft-Rewards-Script](https://github.com/chiihero/Microsoft-Rewards-Script)
+- 验证码重试、退避和调试文件管理思路参考：[LMTXQ/Rainyun-QingLong](https://github.com/LMTXQ/Rainyun-QingLong)
 
 ## 免责声明
 

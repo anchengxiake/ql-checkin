@@ -44,6 +44,17 @@ except ImportError:
     pass
 
 # ============ 配置 ============
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name, '').strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning(f"环境变量 {name}={value!r} 不是整数，使用默认值 {default}")
+        return default
+
+
 BASE_URL = "https://laowang.vip"
 LOGIN_URL = f"{BASE_URL}/member.php?mod=logging&action=login"
 SIGN_URL = f"{BASE_URL}/plugin.php?id=k_misign:sign"
@@ -57,6 +68,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+LAOWANG_SLIDER_RETRY_LIMIT = env_int('LAOWANG_SLIDER_RETRY_LIMIT', 8)
+LAOWANG_SLIDER_RETRY_BACKOFF = env_int('LAOWANG_SLIDER_RETRY_BACKOFF', 2)
 
 
 class SliderSolver:
@@ -991,7 +1005,8 @@ class LaowangSigner:
             var t = window.tncode;
             if (t) { if (t.refresh) t.refresh(); else if (t._reset) t._reset(); }
             ''')
-            time.sleep(2)
+            delay = min(max(LAOWANG_SLIDER_RETRY_BACKOFF, 0) * (attempt + 1), 10)
+            time.sleep(delay or 1)
 
         logger.error("❌ 滑块验证失败")
         return False
@@ -1034,7 +1049,7 @@ class LaowangSigner:
                     time.sleep(1)
 
                 if not self.solve_slider(
-                    max_attempts=8,
+                    max_attempts=LAOWANG_SLIDER_RETRY_LIMIT,
                     wait_timeout=7,
                     fallback_distances=[60, 90, 120, 80, 110, 150]
                 ):
@@ -1273,7 +1288,7 @@ class LaowangSigner:
                             tncode.click()
                             time.sleep(1)
                             if not self.solve_slider(
-                                max_attempts=8,
+                                max_attempts=LAOWANG_SLIDER_RETRY_LIMIT,
                                 wait_timeout=7,
                                 fallback_distances=[60, 90, 120, 80, 110, 150]
                             ):
@@ -1305,7 +1320,7 @@ class LaowangSigner:
                     tncode.click()
                     time.sleep(1)
                     if not self.solve_slider(
-                        max_attempts=8,
+                        max_attempts=LAOWANG_SLIDER_RETRY_LIMIT,
                         wait_timeout=7,
                         fallback_distances=[60, 90, 120, 80, 110, 150]
                     ):

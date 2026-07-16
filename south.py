@@ -13,6 +13,7 @@ import time
 import random
 import json
 import platform
+import tempfile
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 
@@ -41,6 +42,17 @@ except ImportError:
     print("⚠️  未加载通知模块，跳过通知功能")
 
 # 配置
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"⚠️ 环境变量 {name}={value!r} 不是整数，使用默认值 {default}")
+        return default
+
+
 DRISSIONPAGE_HEADLESS = os.getenv("DRISSIONPAGE_HEADLESS", "true").lower() == "true"
 DRISSIONPAGE_CHROME_PATH = os.getenv("DRISSIONPAGE_CHROME_PATH", "").strip()
 SOUTHPLUS_USER_AGENT = os.getenv(
@@ -48,7 +60,10 @@ SOUTHPLUS_USER_AGENT = os.getenv(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
 ).strip()
-SOUTHPLUS_CF_WAIT = int(os.getenv("SOUTHPLUS_CF_WAIT", "60"))
+SOUTHPLUS_CF_WAIT = env_int("SOUTHPLUS_CF_WAIT", 60)
+SOUTHPLUS_CAPTCHA_RETRY_LIMIT = env_int("SOUTHPLUS_CAPTCHA_RETRY_LIMIT", 3)
+SOUTHPLUS_CAPTCHA_RETRY_BACKOFF = env_int("SOUTHPLUS_CAPTCHA_RETRY_BACKOFF", 2)
+SOUTHPLUS_CAPTCHA_DEBUG_DIR = os.getenv("SOUTHPLUS_CAPTCHA_DEBUG_DIR", "").strip()
 
 # 随机延迟配置
 max_random_delay = int(os.getenv("MAX_RANDOM_DELAY", "3600"))
@@ -507,7 +522,19 @@ def solve_login_captcha(browser) -> bool:
         except Exception:
             pass
 
-        for attempt in range(3):
+        retry_limit = SOUTHPLUS_CAPTCHA_RETRY_LIMIT
+        unlimited = retry_limit == -1
+        if retry_limit == 0:
+            print("[DrissionPage] ❌ 登录页需要验证码，但 SOUTHPLUS_CAPTCHA_RETRY_LIMIT=0")
+            return False
+
+        debug_dir = SOUTHPLUS_CAPTCHA_DEBUG_DIR or os.path.join(tempfile.gettempdir(), "southplus-captcha")
+        attempt = 0
+        while unlimited or attempt < retry_limit:
+            attempt += 1
+            total = "∞" if unlimited else str(retry_limit)
+            print(f"[DrissionPage] 验证码处理第 {attempt}/{total} 次")
+
             img_b64 = browser.run_js(f'''
             var input = document.querySelector('input[name="gdcode"]');
             var img = document.querySelector('#ckcode') || document.querySelector('img[src*="ck.php"]');
@@ -543,7 +570,9 @@ def solve_login_captcha(browser) -> bool:
             for variant_name, variant_bytes in variants:
                 if os.getenv("SOUTHPLUS_DEBUG", "false").lower() == "true":
                     try:
-                        with open(f"south_captcha_{attempt}_{variant_name}.png", "wb") as f:
+                        os.makedirs(debug_dir, exist_ok=True)
+                        path = os.path.join(debug_dir, f"south_captcha_{attempt}_{variant_name}.png")
+                        with open(path, "wb") as f:
                             f.write(variant_bytes)
                     except Exception:
                         pass
@@ -559,6 +588,10 @@ def solve_login_captcha(browser) -> bool:
             candidates = sorted(set(candidates), key=lambda x: (abs(len(x) - 5), -len(x), x))
             print(f"[DrissionPage] 验证码候选: {', '.join(candidates) if candidates else '空'}")
             if not candidates:
+                delay = min(max(SOUTHPLUS_CAPTCHA_RETRY_BACKOFF, 0) * attempt, 10)
+                if delay:
+                    print(f"[DrissionPage] 验证码无候选，等待 {delay}s 后刷新重试")
+                    time.sleep(delay)
                 continue
             code = candidates[0]
 
@@ -573,6 +606,10 @@ def solve_login_captcha(browser) -> bool:
             ''')
             if filled:
                 return True
+            delay = min(max(SOUTHPLUS_CAPTCHA_RETRY_BACKOFF, 0) * attempt, 10)
+            if delay:
+                print(f"[DrissionPage] 验证码填写失败，等待 {delay}s 后重试")
+                time.sleep(delay)
         return False
     except Exception as e:
         print(f"[DrissionPage] ❌ 验证码处理失败: {e}")
