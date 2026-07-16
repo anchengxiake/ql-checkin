@@ -786,6 +786,20 @@ def switch_to_captcha_if_present(ctx: RuntimeContext) -> bool:
         return False
 
 
+def compact_text(text: str, limit: int = 500) -> str:
+    text = re.sub(r"\s+", " / ", (text or "").strip())
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def is_daily_sign_done(text: str) -> bool:
+    text = re.sub(r"\s+", " ", text or "")
+    if re.search(r"每日签到\s*(已完成|已领取|已签到|明日再来)", text):
+        return True
+    return False
+
+
 def do_login(ctx: RuntimeContext, username: str, password: str) -> bool:
     from selenium.common import TimeoutException
     from selenium.webdriver.common.by import By
@@ -840,23 +854,36 @@ def do_login(ctx: RuntimeContext, username: str, password: str) -> bool:
 
 
 def find_daily_sign_container(ctx: RuntimeContext):
+    from selenium.common import TimeoutException
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
 
-    label = ctx.wait.until(
+    ctx.wait.until(
         EC.presence_of_element_located(
             (By.XPATH, "//*[contains(normalize-space(.), '每日签到')]")
         )
     )
-    current = label
-    for _ in range(7):
-        text = (current.text or "").strip()
-        if "每日签到" in text and any(
-            keyword in text for keyword in ("领取奖励", "已领取", "已签到", "明日再来")
-        ):
-            return current
-        current = current.find_element(By.XPATH, "..")
-    return label.find_element(By.XPATH, "..")
+    labels = ctx.driver.find_elements(
+        By.XPATH,
+        "//*[normalize-space()='每日签到' or contains(normalize-space(.), '每日签到')]",
+    )
+    for label in labels:
+        current = label
+        for _ in range(8):
+            text = (current.text or "").strip()
+            if (
+                "每日签到" in text
+                and any(keyword in text for keyword in ("领取奖励", "已完成", "已领取", "已签到", "明日再来"))
+                and len(text) < 800
+            ):
+                return current
+            try:
+                current = current.find_element(By.XPATH, "..")
+            except Exception:
+                break
+    if labels:
+        return labels[0].find_element(By.XPATH, "..")
+    raise TimeoutException("未找到每日签到任务")
 
 
 def do_sign_in(ctx: RuntimeContext) -> bool:
@@ -866,11 +893,16 @@ def do_sign_in(ctx: RuntimeContext) -> bool:
     try:
         logger.info("访问雨云积分任务页")
         ctx.driver.get("https://app.rainyun.com/account/reward/earn")
+        page_text = ctx.driver.find_element(By.TAG_NAME, "body").text
+        if is_daily_sign_done(page_text):
+            logger.info("每日签到已完成")
+            return True
+
         container = find_daily_sign_container(ctx)
         status_text = (container.text or "").strip()
-        logger.info("每日签到区域状态: %s", status_text.replace("\n", " / "))
+        logger.info("每日签到区域状态: %s", compact_text(status_text))
 
-        if any(keyword in status_text for keyword in ("已领取", "已签到", "明日再来")):
+        if is_daily_sign_done(status_text) or any(keyword in status_text for keyword in ("已完成", "已领取", "已签到", "明日再来")):
             return True
 
         click_target = None
@@ -894,6 +926,10 @@ def do_sign_in(ctx: RuntimeContext) -> bool:
                 pass
 
         if not click_target:
+            page_text = ctx.driver.find_element(By.TAG_NAME, "body").text
+            if is_daily_sign_done(page_text):
+                logger.info("每日签到已完成")
+                return True
             logger.error("未找到每日签到领取按钮")
             return False
 
@@ -912,7 +948,7 @@ def do_sign_in(ctx: RuntimeContext) -> bool:
 
         time.sleep(5)
         page_text = ctx.driver.find_element(By.TAG_NAME, "body").text
-        if any(keyword in page_text for keyword in ("已领取", "签到成功", "明日再来")):
+        if is_daily_sign_done(page_text) or any(keyword in page_text for keyword in ("已完成", "已领取", "签到成功", "明日再来")):
             logger.info("签到奖励领取成功")
             return True
 
@@ -921,10 +957,10 @@ def do_sign_in(ctx: RuntimeContext) -> bool:
         time.sleep(3)
         container = find_daily_sign_container(ctx)
         refreshed = (container.text or "").strip()
-        if any(keyword in refreshed for keyword in ("已领取", "已签到", "明日再来")):
+        if is_daily_sign_done(refreshed) or any(keyword in refreshed for keyword in ("已完成", "已领取", "已签到", "明日再来")):
             logger.info("签到状态已更新")
             return True
-        logger.warning("未确认到签到成功状态: %s", refreshed.replace("\n", " / "))
+        logger.warning("未确认到签到成功状态: %s", compact_text(refreshed))
         return False
     except TimeoutException:
         logger.error("雨云签到页面加载超时")
