@@ -56,7 +56,7 @@ https://github.com/anchengxiake/ql-checkin.git
 基础脚本通常只需要：
 
 ```bash
-pip3 install requests rsa
+pip3 install requests rsa pycryptodome
 ```
 
 漫画、浏览器自动化等脚本需要额外依赖：
@@ -167,7 +167,7 @@ username2:password2
 | `ty_netdisk_checkin.py` | `TY_USERNAME` | 必需 | `13812345678` | 多账号用换行或 `&` |
 | `ty_netdisk_checkin.py` | `TY_PASSWORD` | 必需 | `password` | 与账号顺序一致 |
 | `ty_netdisk_checkin.py` | `TY_PASSWD` | 兼容 | `password` | 兼容部分上游文档写法 |
-| `mcloud.py` | `ydyp_ck` | 必需 | `cookie1` | 多账号用换行或 `@` |
+| `mcloud.py` | `ydyp_ck` | 必需 | `Authorization#手机号` | 多账号用换行、`@` 或 `&`，兼容上游变量 `ydyp` |
 
 示例：
 
@@ -182,8 +182,8 @@ BAIDU_COOKIE=BDUSS=xxx; STOKEN=xxx
 TY_USERNAME=13812345678&13987654321
 TY_PASSWORD=password1&password2
 
-ydyp_ck=cookie1
-cookie2
+ydyp_ck=Basic xxxxx#13812345678
+Basic yyyyy#13987654321
 ```
 
 ### IKUUU
@@ -354,7 +354,7 @@ MR_MOBILE_USER_AGENT=固定移动端User-Agent
 
 ### 移动云盘 Cookie
 
-登录 [移动云盘](https://yun.139.com/) 后，从浏览器或抓包工具复制脚本需要的 Cookie，填入 `ydyp_ck`。多账号用换行或 `@` 分隔。
+登录 [移动云盘](https://yun.139.com/) 后，从浏览器或抓包工具复制 Authorization，按 `Authorization#手机号` 填入 `ydyp_ck`。多账号用换行、`@` 或 `&` 分隔；脚本也兼容上游变量名 `ydyp`。
 
 ### SouthPlus Cookie
 
