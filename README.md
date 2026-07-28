@@ -14,7 +14,7 @@
 
 ## 功能特性
 
-- 多场景覆盖：网盘、漫画、论坛、机场、Microsoft Rewards 等。
+- 多场景覆盖：网盘、漫画、论坛、机场等。
 - 青龙友好：脚本优先适配 `notify.py` 推送模块。
 - 多账号支持：大部分脚本支持换行、`&`、`&&`、`@` 或编号变量。
 - 随机延迟：多数脚本支持 `RANDOM_SIGNIN` 和 `MAX_RANDOM_DELAY`。
@@ -25,13 +25,11 @@
 ```text
 ql-checkin/
 ├── README.md                    # 项目说明
-├── aliyunpan_checkin.py          # 阿里云盘签到
 ├── baiduwangpan_checkin.py       # 百度网盘签到
 ├── ikuuu_checkin.py              # IKUUU 签到
 ├── jm_punch.py                   # 禁漫天堂签到
 ├── laowang_sign_ql.py            # 老王论坛青龙单文件版
 ├── mcloud.py                     # 移动云盘签到
-├── Microsoft_Rewards_v2.1.py     # Microsoft Rewards 任务
 ├── pica_punch.py                 # 哔咔漫画签到
 ├── quark_punch.py                # 夸克网盘签到
 ├── rainyun_checkin.py             # 雨云签到及可选自动续费
@@ -92,7 +90,6 @@ task laowang_sign_ql.py
 | 哔咔漫画 | `pica_punch.py` | `PICA_ACCOUNT` | `30 8 * * *` | 支持 `PICA_USER` / `PICA_PW` |
 | 禁漫天堂 | `jm_punch.py` | `JM_ACCOUNT` | `35 8 * * *` | 依赖 `jmcomic` |
 | 夸克网盘 | `quark_punch.py` | `COOKIE_QUARK` | `13 8 * * *` | Cookie 签到 |
-| 阿里云盘 | `aliyunpan_checkin.py` | `ALIYUN_REFRESH_TOKEN` | `3 11 * * *` | 支持自动更新 refresh token |
 | 百度网盘 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | `0 9 * * *` | Cookie 签到、成长任务 |
 | 天翼云盘 | `ty_netdisk_checkin.py` | `TY_USERNAME`, `TY_PASSWORD` | `1 16 * * *` | 账号密码签到 |
 | 移动云盘 | `mcloud.py` | `ydyp_ck` | `5 12 * * *` | Cookie 签到 |
@@ -100,7 +97,6 @@ task laowang_sign_ql.py
 | 雨云 | `rainyun_checkin.py` | `RAINYUN_ACCOUNT` | `0 9 * * *` | 单文件，支持验证码和可选自动续费 |
 | SouthPlus | `south.py` | `SOUTHPLUS_COOKIE` | `0 9 * * *` | 推荐 Cookie 模式 |
 | 老王论坛 | `laowang_sign_ql.py` | `LAOWANG_ACCOUNT` | `0 9 * * *` | 青龙推荐单文件版 |
-| Microsoft Rewards | `Microsoft_Rewards_v2.1.py` | `bing_ck_1` | `1 7-20 * * *` | Cookie 必填，Token 可选 |
 
 ## 环境变量配置
 
@@ -160,9 +156,6 @@ username2:password2
 | 脚本 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- | --- |
 | `quark_punch.py` | `COOKIE_QUARK` | 必需 | `kps=xxx; sign=xxx; vcode=xxx; user=xxx` | 多账号用换行或 `&&` |
-| `aliyunpan_checkin.py` | `ALIYUN_REFRESH_TOKEN` | 必需 | `refresh_token_1` | 多账号用换行或 `&` |
-| `aliyunpan_checkin.py` | `AUTO_UPDATE_TOKEN` | 可选 | `true` | 自动更新青龙变量 |
-| `aliyunpan_checkin.py` | `SHOW_TOKEN_IN_NOTIFICATION` | 可选 | `false` | 不建议开启 |
 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | 必需 | `BDUSS=xxx; STOKEN=xxx` | 多账号换行 |
 | `ty_netdisk_checkin.py` | `TY_USERNAME` | 必需 | `13812345678` | 多账号用换行或 `&` |
 | `ty_netdisk_checkin.py` | `TY_PASSWORD` | 必需 | `password` | 与账号顺序一致 |
@@ -173,9 +166,6 @@ username2:password2
 
 ```bash
 COOKIE_QUARK=cookie1&&cookie2
-
-ALIYUN_REFRESH_TOKEN=refresh_token_1
-refresh_token_2
 
 BAIDU_COOKIE=BDUSS=xxx; STOKEN=xxx
 
@@ -302,51 +292,6 @@ user2:p@ss:word2
 - 针对页面出现两个缺口的情况，会尝试多个候选距离。
 - 青龙/Linux 下会自动查找 `/usr/bin/chromium`、`/usr/bin/chromium-browser`、`/usr/bin/google-chrome` 等路径。
 
-### Microsoft Rewards
-
-| 变量名 | 是否必需 | 示例 | 备注 |
-| --- | --- | --- | --- |
-| `bing_ck_1` | 必需 | `完整 Cookie` | 多账号按编号递增 |
-| `bing_token_1` | 可选 | `refresh_token` | 主要用于阅读任务 |
-| `MR_COOKIE_1` / `BING_COOKIE_1` / `ACCOUNT_1_COOKIE` | 兼容 | `完整 Cookie` | Cookie 兼容变量 |
-| `MR_TOKEN_1` / `BING_TOKEN_1` / `ACCOUNT_1_REFRESH_TOKEN` | 兼容 | `refresh_token` | Token 兼容变量 |
-
-脚本已按上游 `chiihero/Microsoft-Rewards-Script` 的配置化 workers 思路重写为青龙单文件版，保留 Cookie/Token 变量兼容。
-
-国内青龙环境推荐：
-
-```bash
-MR_GEO_LOCALE=cn
-MR_LANG_CODE=zh
-MR_BING_HOST=https://cn.bing.com
-MR_QUERY_ENGINES=china,local
-MR_MAX_WORKERS=1
-RANDOM_SIGNIN=false
-MAX_RANDOM_DELAY=0
-```
-
-常用调节项：
-
-```bash
-MR_DO_READ_TASKS=true
-MR_DO_DAILY_SET=true
-MR_DO_MORE_PROMOTIONS=true
-MR_DO_PC_SEARCH=true
-MR_DO_MOBILE_SEARCH=true
-MR_RUN_ON_ZERO_SEARCHES=false
-MR_SEARCH_DELAY_MIN=60
-MR_SEARCH_DELAY_MAX=80
-MR_REQUEST_TIMEOUT=15
-MR_HOT_WORDS_MAX_COUNT=30
-MR_ACCOUNT_MAX_INDEX=50
-MR_EMPTY_LIMIT=10
-MR_TOKEN_CACHE_FILE=microsoft_rewards_token_cache.json
-MR_PC_USER_AGENT=固定桌面端User-Agent
-MR_MOBILE_USER_AGENT=固定移动端User-Agent
-```
-
-`MR_MAX_WORKERS` 控制多账号并发数，青龙环境建议保持 `1`。如只想跑部分任务，可把对应 `MR_DO_*` 开关设为 `false`。`MR_RUN_ON_ZERO_SEARCHES=true` 会在搜索进度为 0 时仍强制跑一批搜索，默认关闭。
-
 ## Cookie 与 Token 获取
 
 ### 夸克网盘 Cookie
@@ -361,13 +306,6 @@ MR_MOBILE_USER_AGENT=固定移动端User-Agent
 2. 打开开发者工具 `F12`，进入 `Network`。
 3. 复制包含 `BDUSS`、`STOKEN` 等字段的完整 `Cookie`。
 
-### 阿里云盘 refresh_token
-
-1. 浏览器访问 [阿里云盘网页版](https://www.aliyundrive.com/) 并登录。
-2. 打开开发者工具 `F12`，进入 `Application`。
-3. 在 `Local Storage` 中找到 `https://www.aliyundrive.com`。
-4. 找到 `token` 项，复制其中的 `refresh_token`。
-
 ### 移动云盘 Cookie
 
 登录 [移动云盘](https://yun.139.com/) 后，从浏览器或抓包工具复制 Authorization，按 `Authorization#手机号` 填入 `ydyp_ck`。多账号用换行、`@` 或 `&` 分隔；脚本也兼容上游变量名 `ydyp`。
@@ -375,10 +313,6 @@ MR_MOBILE_USER_AGENT=固定移动端User-Agent
 ### SouthPlus Cookie
 
 浏览器登录 SouthPlus 后，从开发者工具复制完整 Cookie。Cookie 可能和浏览器 User-Agent 绑定，必要时同步填写 `SOUTHPLUS_USER_AGENT`。
-
-### Microsoft Rewards Cookie
-
-使用同一个浏览器登录 Microsoft Rewards / Bing 后，复制 Bing 请求中的完整 Cookie。脚本会检查必要字段，Cookie 失效时需要重新抓取。
 
 ## 常见问题
 
@@ -443,11 +377,10 @@ python -m py_compile laowang_sign_ql.py rainyun_checkin.py
 
 本项目整理和维护过程中参考了多个优秀上游项目：
 
-- 天翼云盘、百度网盘、阿里云盘、IKUUU 脚本来源和维护参考：[agluo/ql-script-hub](https://github.com/agluo/ql-script-hub)
+- 天翼云盘、百度网盘、IKUUU 脚本来源和维护参考：[agluo/ql-script-hub](https://github.com/agluo/ql-script-hub)
 - 哔咔漫画、禁漫天堂脚本来源和维护参考：[forchannot/comic-auto-punch-in](https://github.com/forchannot/comic-auto-punch-in)
 - 夸克网盘脚本来源和维护参考：[anchengxiake/Quark_Auot_Check_In](https://github.com/anchengxiake/Quark_Auot_Check_In)
 - 移动云盘脚本来源和维护参考：[hlt1995/qlScripts](https://github.com/hlt1995/qlScripts)
-- Microsoft Rewards 脚本来源和维护参考：[chiihero/Microsoft-Rewards-Script](https://github.com/chiihero/Microsoft-Rewards-Script)
 - 雨云签到、验证码识别和自动续费来源及维护参考：[LMTXQ/Rainyun-QingLong](https://github.com/LMTXQ/Rainyun-QingLong)
 
 ## 免责声明
