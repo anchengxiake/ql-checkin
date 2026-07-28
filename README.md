@@ -96,7 +96,7 @@ task laowang_sign_ql.py
 | 百度网盘 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | `0 9 * * *` | Cookie 签到、成长任务 |
 | 天翼云盘 | `ty_netdisk_checkin.py` | `TY_USERNAME`, `TY_PASSWORD` | `1 16 * * *` | 账号密码签到 |
 | 移动云盘 | `mcloud.py` | `ydyp_ck` | `5 12 * * *` | Cookie 签到 |
-| IKUUU | `ikuuu_checkin.py` | `IKUUU_EMAIL`, `IKUUU_PASSWD` | `0 21 * * *` | 多账号逗号分隔 |
+| IKUUU | `ikuuu_checkin.py` | `IKUUU_COOKIE` | `0 21 * * *` | 推荐 Cookie 签到，账号密码为备用 |
 | 雨云 | `rainyun_checkin.py` | `RAINYUN_ACCOUNT` | `0 9 * * *` | 单文件，支持验证码和可选自动续费 |
 | SouthPlus | `south.py` | `SOUTHPLUS_COOKIE` | `0 9 * * *` | 推荐 Cookie 模式 |
 | 老王论坛 | `laowang_sign_ql.py` | `LAOWANG_ACCOUNT` | `0 9 * * *` | 青龙推荐单文件版 |
@@ -190,8 +190,10 @@ Basic yyyyy#13987654321
 
 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- |
-| `IKUUU_EMAIL` | 必需 | `user1@example.com,user2@example.com` | 多账号英文逗号分隔 |
-| `IKUUU_PASSWD` | 必需 | `password1,password2` | 与邮箱顺序一致 |
+| `IKUUU_COOKIE` | 推荐 | `uid=xxx; email=xxx; key=xxx; ip=xxx; expire_in=xxx` | 浏览器登录后复制完整 Cookie，多账号用换行或 `&&` |
+| `IKUUU_EMAIL` | 备用 | `user1@example.com,user2@example.com` | 多账号英文逗号分隔，可能触发站点验证 |
+| `IKUUU_PASSWD` | 备用 | `password1,password2` | 与邮箱顺序一致 |
+| `IKUUU_BASE_URL` | 可选 | `https://ikuuu.win` | 域名变动时覆盖 |
 
 ### 雨云
 
