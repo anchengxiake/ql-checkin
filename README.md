@@ -311,6 +311,8 @@ user2:p@ss:word2
 | `MR_COOKIE_1` / `BING_COOKIE_1` / `ACCOUNT_1_COOKIE` | 兼容 | `完整 Cookie` | Cookie 兼容变量 |
 | `MR_TOKEN_1` / `BING_TOKEN_1` / `ACCOUNT_1_REFRESH_TOKEN` | 兼容 | `refresh_token` | Token 兼容变量 |
 
+脚本已按上游 `chiihero/Microsoft-Rewards-Script` 的配置化 workers 思路重写为青龙单文件版，保留 Cookie/Token 变量兼容。
+
 国内青龙环境推荐：
 
 ```bash
@@ -318,6 +320,7 @@ MR_GEO_LOCALE=cn
 MR_LANG_CODE=zh
 MR_BING_HOST=https://cn.bing.com
 MR_QUERY_ENGINES=china,local
+MR_MAX_WORKERS=1
 RANDOM_SIGNIN=false
 MAX_RANDOM_DELAY=0
 ```
@@ -325,13 +328,24 @@ MAX_RANDOM_DELAY=0
 常用调节项：
 
 ```bash
+MR_DO_READ_TASKS=true
+MR_DO_DAILY_SET=true
+MR_DO_MORE_PROMOTIONS=true
+MR_DO_PC_SEARCH=true
+MR_DO_MOBILE_SEARCH=true
+MR_RUN_ON_ZERO_SEARCHES=false
 MR_SEARCH_DELAY_MIN=60
 MR_SEARCH_DELAY_MAX=80
 MR_REQUEST_TIMEOUT=15
 MR_HOT_WORDS_MAX_COUNT=30
+MR_ACCOUNT_MAX_INDEX=50
+MR_EMPTY_LIMIT=10
+MR_TOKEN_CACHE_FILE=microsoft_rewards_token_cache.json
 MR_PC_USER_AGENT=固定桌面端User-Agent
 MR_MOBILE_USER_AGENT=固定移动端User-Agent
 ```
+
+`MR_MAX_WORKERS` 控制多账号并发数，青龙环境建议保持 `1`。如只想跑部分任务，可把对应 `MR_DO_*` 开关设为 `false`。`MR_RUN_ON_ZERO_SEARCHES=true` 会在搜索进度为 0 时仍强制跑一批搜索，默认关闭。
 
 ## Cookie 与 Token 获取
 
