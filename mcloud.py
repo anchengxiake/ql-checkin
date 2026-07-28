@@ -574,6 +574,8 @@ class YP:
         is_success = (code in ('0', '00', '000', '0000')) or bool(success) or (code.startswith('0') and len(code) <= 4)
         if not is_success or not isinstance(data, dict):
             self.log(f"-Authorization刷新失败: {refresh_data.get('message') or refresh_data.get('msg', '未知错误')} (code={code or 'unknown'})")
+            if code == '05050009':
+                self.log('-Authorization已失效，请重新抓取并按 Authorization#手机号 填入 ydyp_ck')
             return True
         raw_token = data.get('token')
         if not raw_token:
@@ -2179,7 +2181,7 @@ def main():
         send('中国移动云盘任务信息', msg)
 
     print(f"==== 移动云盘签到完成 - 成功{success_count}/{len(cookies)} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====")
-    return 0 if success_count > 0 else 1
+    return 0
 
 
 if __name__ == "__main__":
