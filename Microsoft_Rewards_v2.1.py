@@ -35,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote
 
 import requests
 
@@ -90,6 +90,24 @@ def mask_email(email: str) -> str:
     if len(local) <= 2:
         return f"{local[:1]}***@{domain}"
     return f"{local[0]}***{local[-1]}@{domain}"
+
+
+def parse_cookie_string(cookie: str) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for part in (cookie or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
+
+
+def parse_cookie_kv_value(value: str) -> Dict[str, str]:
+    try:
+        parsed = parse_qs(unquote(value or ""), keep_blank_values=True)
+        return {key: values[-1] if values else "" for key, values in parsed.items()}
+    except Exception:
+        return {}
 
 
 def format_seconds(seconds: int) -> str:
@@ -370,13 +388,10 @@ class AccountManager:
             if not cookie:
                 print_log("账号配置", "缺少 Cookie，跳过", index)
                 continue
-            missing_fields = []
+            if ".MSA.Auth=" not in cookie and "_U=" not in cookie:
+                print_log("账号配置", "Cookie 缺少认证字段 .MSA.Auth/_U，可能无法获取账号信息", index)
             if "tifacfaatcs=" not in cookie:
-                missing_fields.append("tifacfaatcs")
-            if ".MSA.Auth=" not in cookie:
-                missing_fields.append(".MSA.Auth")
-            if missing_fields:
-                print_log("账号配置", f"Cookie 缺少字段 {', '.join(missing_fields)}，仍尝试执行", index)
+                print_log("账号配置", "未检测到旧版 tifacfaatcs 字段，将使用新版 dashboard Cookie 解析", index)
 
             accounts.append(AccountInfo(index=index, alias=alias, cookie=cookie, refresh_token=refresh_token))
         return accounts
@@ -463,18 +478,53 @@ class RewardsClient:
         return headers
 
     def get_home_info(self) -> Optional[Dict[str, Any]]:
-        response = self.request("GET", "https://rewards.bing.com", headers=self.browser_headers())
+        response = self.request("GET", "https://rewards.bing.com/dashboard", headers=self.browser_headers())
+        if response.status_code in (301, 302, 303, 307, 308) or response.status_code >= 400:
+            response = self.request("GET", "https://rewards.bing.com", headers=self.browser_headers())
         if response.status_code != 200:
             print_log("账号信息", f"首页状态码 {response.status_code}", self.account.index)
             return None
         html = response.text
         points = self._extract_int(html, r'"availablePoints"\s*:\s*(\d+)')
-        email = self._extract_str(html, r'email:\s*"([^"]+)"') or self._extract_str(html, r'"email"\s*:\s*"([^"]+)"')
+        if points is None:
+            points = self._extract_int(html, r'"availableBalance"\s*:\s*(\d+)')
+        if points is None:
+            points = self._extract_int(html, r'"balance"\s*:\s*(\d+)')
+        if points is None:
+            points = self._extract_int(html, r'可用积分[^0-9]{0,80}([0-9,]+)')
+        email = (
+            self._extract_str(html, r'email:\s*"([^"]+)"')
+            or self._extract_str(html, r'"email"\s*:\s*"([^"]+)"')
+            or self._extract_str(html, r'"displayName"\s*:\s*"([^"]+)"')
+        )
         token = self._extract_str(html, r'name="__RequestVerificationToken".*?value="([^"]+)"')
-        if points is None or not email:
-            print_log("账号信息", "Cookie 可能失效，无法解析积分或邮箱", self.account.index)
+        cookie_info = self.parse_dashboard_cookie_info()
+        if points is None:
+            points = cookie_info.get("points")
+        if not email:
+            email = cookie_info.get("email") or self.account.alias
+        if points is None:
+            print_log("账号信息", "Cookie 可能失效，无法解析积分", self.account.index)
             return None
         return {"points": points, "email": email, "token": token}
+
+    def parse_dashboard_cookie_info(self) -> Dict[str, Any]:
+        cookies = parse_cookie_string(self.account.cookie)
+        result: Dict[str, Any] = {}
+
+        ss = parse_cookie_kv_value(cookies.get("_SS", ""))
+        rwb = parse_cookie_kv_value(cookies.get("_RwBf", ""))
+        for key in ("R", "RB", "rc", "rb"):
+            value = ss.get(key) or rwb.get(key)
+            if value and str(value).replace(",", "").isdigit():
+                result["points"] = int(str(value).replace(",", ""))
+                break
+
+        wls = parse_cookie_kv_value(cookies.get("WLS", ""))
+        display = wls.get("N") or cookies.get("WLS")
+        if display:
+            result["email"] = display
+        return result
 
     def get_dashboard(self, silent: bool = False) -> Optional[Dict[str, Any]]:
         try:
