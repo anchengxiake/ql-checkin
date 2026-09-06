@@ -68,7 +68,8 @@ def wait_with_countdown(delay_seconds):
 class PicaPuncher:
     """哔咔漫画自动签到"""
 
-    API_URL = "https://picaapi.picacomic.com"
+    API_URL = "https://picaapi.go2778.com"
+    API_URLS = (API_URL, "https://picaapi.picacomic.com")
     SECRET_KEY = r"~d}$Q7$eIni=V)9\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn"
     API_KEY = "C69BAF41DA5ABD1FFEDC6D2FEA56B"
 
@@ -105,52 +106,53 @@ class PicaPuncher:
         return headers
 
     def run(self):
-        try:
-            logging.info(f"正在尝试登录哔咔 (用户: {self.username})...")
-            login_path = "auth/sign-in"
-            res = requests.post(
-                f"{self.API_URL}/{login_path}",
-                json={"email": self.username, "password": self.password},
-                headers=self._get_headers(login_path, "POST"),
-                proxies=self.proxies,
-                timeout=20,
-            )
+        login_path = "auth/sign-in"
+        punch_path = "users/punch-in"
 
-            login_data = res.json()
-            if res.status_code != 200 or login_data.get("message") != "success":
-                logging.error(f"❌ 哔咔登录失败: {login_data.get('message')}")
-                return False
+        for api_url in self.API_URLS:
+            try:
+                logging.info(f"正在尝试登录哔咔 (用户: {self.username}, 地址: {api_url})...")
+                res = requests.post(
+                    f"{api_url}/{login_path}",
+                    json={"email": self.username, "password": self.password},
+                    headers=self._get_headers(login_path, "POST"),
+                    proxies=self.proxies,
+                    timeout=20,
+                )
 
-            token = login_data.get("data", {}).get("token")
-            if not token:
-                logging.error("❌ 哔咔获取token失败")
-                return False
-            
-            logging.info("🎉 哔咔登录成功")
+                login_data = res.json()
+                if res.status_code != 200 or login_data.get("message") != "success":
+                    logging.warning(f"哔咔登录失败 ({api_url}): {login_data.get('message')}")
+                    continue
 
-            # 签到
-            punch_path = "users/punch-in"
-            res = requests.post(
-                f"{self.API_URL}/{punch_path}",
-                headers=self._get_headers(punch_path, "POST", token),
-                proxies=self.proxies,
-                timeout=20,
-            )
+                token = login_data.get("data", {}).get("token")
+                if not token:
+                    logging.warning(f"哔咔获取token失败 ({api_url})")
+                    continue
 
-            punch_data = res.json()
-            if punch_data.get("message") == "success":
-                logging.info("✅ 哔咔签到成功")
-                return True
-            elif punch_data.get("message") == "user already punch in":
-                logging.info("⚠️  哔咔今日已签到")
-                return True
-            else:
-                logging.warning(f"⚠️  哔咔签到失败: {punch_data.get('message')}")
-                return False
+                logging.info(f"🎉 哔咔登录成功 ({api_url})")
 
-        except Exception as e:
-            logging.error(f"❌ 哔咔异常: {e}")
-            return False
+                res = requests.post(
+                    f"{api_url}/{punch_path}",
+                    headers=self._get_headers(punch_path, "POST", token),
+                    proxies=self.proxies,
+                    timeout=20,
+                )
+
+                punch_data = res.json()
+                if punch_data.get("message") == "success":
+                    logging.info("✅ 哔咔签到成功")
+                    return True
+                elif punch_data.get("message") == "user already punch in":
+                    logging.info("⚠️  哔咔今日已签到")
+                    return True
+
+                logging.warning(f"⚠️  哔咔签到失败 ({api_url}): {punch_data.get('message')}")
+            except Exception as e:
+                logging.warning(f"哔咔地址访问异常 ({api_url}): {e}")
+
+        logging.error("❌ 哔咔所有地址均签到失败")
+        return False
 
 
 def parse_accounts(account_str):
