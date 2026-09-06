@@ -87,7 +87,7 @@ task laowang_sign_ql.py
 
 | 类型 | 脚本 | 主要变量 | Cron 建议 | 说明 |
 | --- | --- | --- | --- | --- |
-| 哔咔漫画 | `pica_punch.py` | `PICA_ACCOUNT` | `30 8 * * *` | 支持 `PICA_USER` / `PICA_PW` |
+| 哔咔漫画 | `pica_punch.py` | `PICA_ACCOUNT` | `30 8 * * *` | 支持自定义 API 地址和国内地址失败自动切换 |
 | 禁漫天堂 | `jm_punch.py` | `JM_ACCOUNT` | `35 8 * * *` | 依赖 `jmcomic` |
 | 夸克网盘 | `quark_punch.py` | `COOKIE_QUARK` | `13 8 * * *` | Cookie 签到 |
 | 百度网盘 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | `0 9 * * *` | Cookie 签到、成长任务 |
@@ -102,12 +102,12 @@ task laowang_sign_ql.py
 
 ### 通用配置
 
-| 变量名 | 说明 | 默认值 | 备注 |
+| 变量名 | 说明 | 默认值 | 支持脚本 |
 | --- | --- | --- | --- |
-| `RANDOM_SIGNIN` | 是否启用随机延迟 | `true` | 设为 `false` 可关闭 |
-| `MAX_RANDOM_DELAY` | 最大随机延迟秒数 | `3600` | 老王论坛默认 `300` |
-| `PRIVACY_MODE` | 隐私保护模式 | `true` | 部分脚本支持 |
-| `MY_PROXY` | 通用代理 | 空 | 漫画类脚本会读取 |
+| `RANDOM_SIGNIN` | 是否启用随机延迟 | `true` | 百度、禁漫、哔咔、夸克、移动云盘、IKUUU、SouthPlus、老王论坛、天翼云盘 |
+| `MAX_RANDOM_DELAY` | 最大随机延迟秒数 | `3600` | 老王论坛默认 `300`；雨云使用 `RAINYUN_CONFIG.max_delay`，单位为分钟 |
+| `PRIVACY_MODE` | 隐私保护模式 | `true` | 百度网盘、IKUUU |
+| `MY_PROXY` | HTTP/HTTPS 代理 | 空 | 禁漫、哔咔 |
 
 关闭随机延迟：
 
@@ -137,9 +137,15 @@ MAX_RANDOM_DELAY=0
 | --- | --- | --- | --- | --- |
 | `pica_punch.py` | `PICA_ACCOUNT` | 推荐 | `user@example.com:password` | 多账号用换行或 `&` |
 | `pica_punch.py` | `PICA_USER`, `PICA_PW` | 兼容 | `user@example.com` / `password` | 单账号旧变量 |
+| `pica_punch.py` | `PICA_API_URL` | 可选 | `https://picaapi.go2778.com` | 首选 API 地址；登录或签到失败时自动尝试原地址 `https://picaapi.picacomic.com` |
+| `pica_punch.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `pica_punch.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
+| `pica_punch.py` | `MY_PROXY` | 可选 | `http://127.0.0.1:7890` | HTTP/HTTPS 代理 |
 | `jm_punch.py` | `JM_ACCOUNT` | 推荐 | `username:password` | 多账号用换行或 `&` |
 | `jm_punch.py` | `JM_USER`, `JM_PW` | 兼容 | `username` / `password` | 单账号旧变量 |
-| 通用 | `MY_PROXY` | 可选 | `http://127.0.0.1:7890` | 代理 |
+| `jm_punch.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `jm_punch.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
+| `jm_punch.py` | `MY_PROXY` | 可选 | `http://127.0.0.1:7890` | HTTP/HTTPS 代理 |
 
 示例：
 
@@ -156,11 +162,21 @@ username2:password2
 | 脚本 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- | --- |
 | `quark_punch.py` | `COOKIE_QUARK` | 必需 | `kps=xxx; sign=xxx; vcode=xxx; user=xxx` | 多账号用换行或 `&&` |
+| `quark_punch.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `quark_punch.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | 必需 | `BDUSS=xxx; STOKEN=xxx` | 多账号换行 |
+| `baiduwangpan_checkin.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `baiduwangpan_checkin.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
+| `baiduwangpan_checkin.py` | `PRIVACY_MODE` | 可选 | `true` | 是否对账号信息脱敏 |
 | `ty_netdisk_checkin.py` | `TY_USERNAME` | 必需 | `13812345678` | 多账号用换行或 `&` |
 | `ty_netdisk_checkin.py` | `TY_PASSWORD` | 必需 | `password` | 与账号顺序一致 |
 | `ty_netdisk_checkin.py` | `TY_PASSWD` | 兼容 | `password` | 兼容部分上游文档写法 |
+| `ty_netdisk_checkin.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `ty_netdisk_checkin.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
 | `mcloud.py` | `ydyp_ck` | 必需 | `Authorization#手机号` | 多账号用换行、`@` 或 `&`，兼容上游变量 `ydyp` |
+| `mcloud.py` | `ydyp` | 兼容 | `Authorization#手机号` | `ydyp_ck` 未设置时读取；多账号用换行、`@` 或 `&` |
+| `mcloud.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `mcloud.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
 
 示例：
 
@@ -184,6 +200,9 @@ Basic yyyyy#13987654321
 | `IKUUU_EMAIL` | 备用 | `user1@example.com,user2@example.com` | 多账号英文逗号分隔，可能触发站点验证 |
 | `IKUUU_PASSWD` | 备用 | `password1,password2` | 与邮箱顺序一致 |
 | `IKUUU_BASE_URL` | 可选 | `https://ikuuu.win` | 域名变动时覆盖 |
+| `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
+| `PRIVACY_MODE` | 可选 | `true` | 是否对邮箱等账号信息脱敏 |
 
 ### 雨云
 
@@ -194,11 +213,14 @@ Basic yyyyy#13987654321
 | `RAINYUN_ACCOUNT` | 必需 | `[["user@example.com","password","false",""]]` | JSON 数组，多账号添加多个子数组 |
 | `RAINYUN_CONFIG` | 可选 | `{"captcha_retry_limit":10}` | 高级 JSON 配置 |
 | `RAINYUN_HEADLESS` | 可选 | `true` | 是否使用无头浏览器 |
+| `RAINYUN_USER_AGENT` | 可选 | Chrome UA | 自定义浏览器 User-Agent |
 | `RAINYUN_CHROME_PATH` | 可选 | `/usr/bin/chromium` | 自定义浏览器路径 |
 | `RAINYUN_DRIVER_PATH` | 可选 | `/usr/bin/chromedriver` | 自定义 ChromeDriver 路径 |
 | `RAINYUN_CAPTCHA_RETRY_LIMIT` | 可选 | `10` | 覆盖验证码重试次数，`-1` 为无限重试 |
 | `RAINYUN_TIMEOUT` | 可选 | `20` | 页面等待超时秒数 |
 | `RAINYUN_KEEP_DEBUG_FILES` | 可选 | `false` | 保留验证码临时图片 |
+| `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `MAX_RANDOM_DELAY` | 可选 | `RAINYUN_CONFIG.max_delay * 60` | 覆盖随机延迟最大秒数，单位为秒 |
 | `RAINYUN_DEBUG` | 可选 | `false` | 输出调试日志 |
 
 账号数组参数：
@@ -227,18 +249,30 @@ MAX_RANDOM_DELAY=0
 RAINYUN_CONFIG={"captcha_retry_limit":-1,"renew_threshold_days":5}
 ```
 
-常用 `RAINYUN_CONFIG` 参数：
+`RAINYUN_CONFIG` 支持的完整配置项：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `timeout` | `20` | 页面等待超时秒数 |
-| `max_delay` | `5` | 未设置 `MAX_RANDOM_DELAY` 时的最大随机延迟分钟数 |
+| `captcha_wait` | `6` | 验证码识别后的等待秒数 |
+| `max_delay` | `5` | 随机延迟最大分钟数 |
 | `captcha_retry_limit` | `10` | 验证码重试次数，`-1` 为无限重试 |
 | `similarity_threshold` | `0.4` | 图案匹配相似度阈值 |
-| `renew_days` | `7` | 自动续费天数 |
+| `download_max_retries` | `3` | 验证码图片下载最大重试次数 |
+| `download_retry_delay` | `2` | 验证码图片下载重试间隔秒数 |
+| `download_timeout` | `10` | 验证码图片下载超时秒数 |
+| `api_base_url` | `https://api.v2.rainyun.com` | 雨云 API 地址 |
+| `api_request_timeout` | `10` | API 请求超时秒数 |
+| `api_max_retries` | `3` | API 请求最大重试次数 |
+| `api_retry_delay` | `2` | API 请求重试间隔秒数 |
+| `renew_days` | `7` | 自动续费时长 |
 | `renew_threshold_days` | `3` | 剩余天数小于等于该值时触发续费 |
 | `min_points_reserve` | `5000` | 续费后至少保留的积分 |
-| `keep_debug_files` | `false` | 是否保留验证码临时目录 |
+| `points_to_cny_rate` | `2000` | 积分兑换金额的换算比例 |
+| `account_interval_min` | `3` | 多账号执行间隔最小分钟数 |
+| `account_interval_max` | `6` | 多账号执行间隔最大分钟数 |
+| `headless` | `true` | 是否使用无头浏览器 |
+| `keep_debug_files` | `false` | 是否保留验证码临时文件 |
 
 ### SouthPlus
 
@@ -259,6 +293,8 @@ RAINYUN_CONFIG={"captcha_retry_limit":-1,"renew_threshold_days":5}
 | `SOUTHPLUS_CAPTCHA_DEBUG_DIR` | 可选 | 系统临时目录 | 调试图片输出目录 |
 | `DRISSIONPAGE_HEADLESS` | 可选 | `true` | 是否无头浏览器 |
 | `DRISSIONPAGE_CHROME_PATH` | 可选 | `/usr/bin/chromium` | 自定义浏览器路径 |
+| `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
 
 ### 老王论坛
 
@@ -277,6 +313,8 @@ task laowang_sign_ql.py
 | `LAOWANG_USE_SLIDE_MATCH_FALLBACK` | 可选 | `true` | 极少数情况下回退到 `ddddocr.slide_match` |
 | `LAOWANG_SLIDER_RETRY_LIMIT` | 可选 | `8` | 滑块最大尝试次数 |
 | `LAOWANG_SLIDER_RETRY_BACKOFF` | 可选 | `2` | 滑块刷新后的退避秒数基数 |
+| `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
+| `MAX_RANDOM_DELAY` | 可选 | `300` | 随机延迟最大秒数 |
 
 示例：
 

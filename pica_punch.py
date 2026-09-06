@@ -68,7 +68,7 @@ def wait_with_countdown(delay_seconds):
 class PicaPuncher:
     """哔咔漫画自动签到"""
 
-    API_URL = "https://picaapi.go2778.com"
+    API_URL = os.getenv("PICA_API_URL", "https://picaapi.go2778.com").rstrip("/")
     API_URLS = (API_URL, "https://picaapi.picacomic.com")
     SECRET_KEY = r"~d}$Q7$eIni=V)9\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn"
     API_KEY = "C69BAF41DA5ABD1FFEDC6D2FEA56B"
