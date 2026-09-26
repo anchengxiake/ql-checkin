@@ -350,24 +350,15 @@ def split_accounts(token):
 
 
 # 发送通知
+
 def load_send():
-    cur_path = path.abspath(path.dirname(__file__))
-    notify_file = cur_path + "/notify.py"
-
-    if path.exists(notify_file):
-        try:
-            import sys
-            if cur_path not in sys.path:
-                sys.path.insert(0, cur_path)
-            from notify import send
-            print("加载通知服务成功！")
-            return send
-        except Exception as e:
-            print(f"加载通知服务失败: {e}")
-    else:
-        print("加载通知服务失败: notify.py不存在")
-
-    return False
+    try:
+        from ql_notify import send
+        print("加载青龙通知适配器成功！")
+        return send
+    except Exception as e:
+        print(f"加载通知服务失败: {e}")
+        return False
 
 
 class YP:

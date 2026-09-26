@@ -42,7 +42,7 @@ def env_bool(name, default):
 hadsend = False
 send = None
 try:
-    from notify import send
+    from ql_notify import send
     hadsend = True
     print("✅ 已加载notify.py通知模块")
 except ImportError:

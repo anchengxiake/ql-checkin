@@ -34,41 +34,131 @@ ql-checkin/
 ├── quark_punch.py                # 夸克网盘签到
 ├── rainyun_checkin.py             # 雨云签到及可选自动续费
 ├── south.py                      # SouthPlus 任务
-└── ty_netdisk_checkin.py         # 天翼云盘签到
+├── ty_netdisk_checkin.py         # 天翼云盘签到
+└── ql_notify.py                  # 按脚本分流并调用青龙 notify.py
 ```
 
 ## 快速开始
 
 ### 1. 拉取仓库
 
-在青龙面板「订阅管理」中添加订阅：
+推荐在青龙面板「订阅管理」中添加订阅：
 
 ```text
 https://github.com/anchengxiake/ql-checkin.git
 ```
 
-也可以只上传需要执行的 `.py` 文件到青龙脚本目录。
+订阅配置建议如下：
+
+| 配置项 | 建议值 |
+| --- | --- |
+| 仓库地址 | `https://github.com/anchengxiake/ql-checkin.git` |
+| 分支 | `main` |
+| 文件后缀 | `py` |
+| 依赖文件 | `ql_notify.py` |
+
+`ql_notify.py` 是仓库内置的通知适配器。订阅时把它填写到青龙的「依赖文件」字段，青龙会将它一并复制到脚本目录；各签到脚本就能直接调用它。整个过程不会修改青龙自带的 `/ql/data/scripts/notify.py`，也不需要新人手动复制或编辑通知文件。
+
+如果你的青龙版本没有「依赖文件」字段，请把仓库中的 `ql_notify.py` 与需要运行的签到脚本一起上传到同一个脚本目录。不要把它重命名为 `notify.py`，也不要覆盖青龙原生通知文件。
 
 ### 2. 安装依赖
 
-基础脚本通常只需要：
+本仓库没有发布由青龙官方维护的固定依赖清单。青龙的「依赖管理」只是按类型调用对应的包管理器；依赖名称和是否需要安装，仍以脚本源码中的导入为准。青龙官方支持 Python3、JavaScript、Shell、TypeScript，并提供环境变量和依赖管理功能；Docker 版的 `debian` 镜像适合安装 Alpine 不支持的系统依赖。
 
-```bash
-pip3 install requests rsa pycryptodome
+#### 安装顺序
+
+如果要运行本仓库的全部脚本，请严格按以下顺序安装：
+
+1. **先安装 Linux 依赖**：`chromium`、`chromium-driver`。这一步准备浏览器和系统组件。
+2. **再安装 Python3 依赖**：`requests`、`rsa`、`pycryptodome` 等 Python 包。
+3. **最后配置环境变量并运行测试任务**。
+
+本仓库当前没有需要额外安装的 NodeJs 依赖。Linux 依赖安装完成并显示「已安装」后，再开始安装 Python3 依赖；如果 Linux 依赖安装失败，应先处理浏览器安装问题，不要直接跳过。
+
+#### 第 1 步：青龙面板中选择 Linux
+
+需要浏览器自动化的脚本还需要系统级浏览器。对于 `whyour/qinglong:debian` 容器，可安装：
+
+```text
+chromium
+chromium-driver
 ```
 
-漫画、浏览器自动化等脚本需要额外依赖：
+二者必须使用兼容的主版本。安装完成后再继续 Python3 依赖。雨云脚本可通过环境变量指定路径：
 
-```bash
-pip3 install jmcomic DrissionPage ddddocr python-dotenv opencv-python selenium
+```text
+RAINYUN_CHROME_PATH=/usr/bin/chromium
+RAINYUN_DRIVER_PATH=/usr/bin/chromedriver
 ```
 
-老王论坛、SouthPlus 和雨云需要 Chrome/Chromium。雨云单文件版还需要匹配的 ChromeDriver。青龙容器内没有浏览器时，可按系统环境安装，例如 Debian/Ubuntu 容器：
+SouthPlus 和老王论坛使用 DrissionPage，也需要容器内存在可启动的 Chromium/Chrome；可按需设置：
+
+```text
+DRISSIONPAGE_CHROME_PATH=/usr/bin/chromium
+```
+
+在 Docker 中建议给 Chromium 分配更大的共享内存，例如 Compose：
+
+```yaml
+shm_size: "1gb"
+```
+
+#### 第 2 步：青龙面板中选择 Python3
+
+按需运行本仓库全部脚本时，建议安装：
+
+```text
+requests
+rsa
+pycryptodome
+jmcomic
+DrissionPage
+ddddocr
+python-dotenv
+selenium
+opencv-python-headless
+Pillow
+numpy
+```
+
+其中：
+
+- `requests`、`rsa`、`pycryptodome`、`jmcomic`、`DrissionPage`、`ddddocr`、`python-dotenv`、`selenium` 是对应脚本的第三方依赖。
+- `Pillow` 只在 SouthPlus 的图片验证码处理路径使用。
+- `numpy` 与 OpenCV 图像识别路径配合使用；通常会作为 OpenCV 的依赖被安装。
+- 无桌面服务器优先使用 `opencv-python-headless`，不要同时安装 `opencv-python` 和 `opencv-python-headless`。
+- Python 标准库（例如 `os`、`json`、`re`、`datetime`、`urllib`）不需要在青龙中创建依赖。
+
+如果只运行某个脚本，可以按下表最小安装：
+
+| 脚本 | Python3 依赖 |
+| --- | --- |
+| `baiduwangpan_checkin.py`、`ikuuu_checkin.py`、`pica_punch.py`、`quark_punch.py` | `requests` |
+| `jm_punch.py` | `jmcomic` |
+| `mcloud.py` | `requests`、`pycryptodome` |
+| `ty_netdisk_checkin.py` | `requests`、`rsa` |
+| `rainyun_checkin.py` | `requests`、`selenium`；验证码路径还需要 `opencv-python-headless`、`numpy`、`ddddocr` |
+| `south.py` | `DrissionPage`；验证码图片处理还需要 `ddddocr`、`Pillow` |
+| `laowang_sign_ql.py` | `DrissionPage`、`ddddocr`；OpenCV 路径还需要 `opencv-python-headless`、`numpy`；`.env` 文件需要 `python-dotenv` |
+
+#### 第 3 步：青龙面板中选择 NodeJs
+
+本仓库当前列出的签到脚本均为 Python，不需要额外的 NodeJs 依赖。只有运行其他 JavaScript/TypeScript 脚本并且源码导入了第三方模块时，才在 NodeJs 分类中添加对应的 npm 包。
+
+#### 使用命令行安装
+
+面板安装失败时，可以进入青龙容器后使用与面板分类对应的包管理器：
 
 ```bash
+# Python3 依赖
+pip3 install requests rsa pycryptodome jmcomic DrissionPage ddddocr python-dotenv selenium opencv-python-headless Pillow numpy
+
+# Debian 容器中的 Linux 依赖
 apt-get update
 apt-get install -y chromium chromium-driver
 ```
+
+上面的 `pip3` 命令适合一次启用全部脚本；只运行部分脚本时可以按表格缩减依赖。
 
 ### 3. 配置环境变量
 
@@ -119,7 +209,11 @@ MAX_RANDOM_DELAY=0
 
 ### 推送通知
 
-脚本会优先尝试加载青龙常见的 `notify.py`。通知变量由你的 `notify.py` 决定，常见变量如下：
+仓库内置 `ql_notify.py`，但不替换青龙自带的 `notify.py`。各签到脚本通过适配器调用青龙原生通知函数，因此青龙升级不会覆盖本仓库的分流逻辑。通过 GitHub 订阅更新时，`ql_notify.py` 会随仓库一起更新，通知逻辑由本仓库统一维护；青龙原生通知文件保持不变，降低新人配置和后期维护风险。
+
+如果只选择部分脚本运行，也必须同时拉取或上传 `ql_notify.py`；否则脚本会回退到无法分流的状态，无法使用脚本专属通知配置。
+
+默认行为是继续使用青龙全局通知变量：
 
 | 变量名 | 说明 |
 | --- | --- |
@@ -130,6 +224,34 @@ MAX_RANDOM_DELAY=0
 | `DD_BOT_TOKEN` | 钉钉机器人 Token |
 | `DD_BOT_SECRET` | 钉钉机器人密钥 |
 | `BARK_PUSH` | Bark 推送地址 |
+
+如需给单个脚本指定通知渠道，在变量名前加脚本前缀。脚本专属变量存在时，只使用该脚本专属配置；没有专属变量时自动回退到青龙全局配置。
+
+支持的前缀：
+
+```text
+PICA、JM、QUARK、BAIDU、TY、MCLOUD、IKUUU、RAINYUN、SOUTHPLUS、LAOWANG
+```
+
+例如，只让雨云签到发送 Telegram，只让 SouthPlus 发送 PushPlus：
+
+```text
+RAINYUN_TG_BOT_TOKEN=你的雨云专属TG机器人Token
+RAINYUN_TG_USER_ID=你的雨云专属TG用户ID
+
+SOUTHPLUS_PUSH_PLUS_TOKEN=你的SouthPlus专属PushPlus Token
+```
+
+脚本专属变量名就是青龙原生变量名前加前缀，例如：
+
+```text
+RAINYUN_BARK_PUSH
+BAIDU_PUSH_PLUS_TOKEN
+JM_TG_BOT_TOKEN
+LAOWANG_DD_BOT_TOKEN
+```
+
+注意：脚本专属配置是“覆盖式”的。配置了 `RAINYUN_TG_BOT_TOKEN` 后，雨云不会再使用全局的 `TG_BOT_TOKEN`；同一脚本前缀下配置多个渠道时，会同时发送到这些专属渠道。
 
 ### 漫画类
 

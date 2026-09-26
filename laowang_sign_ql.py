@@ -577,7 +577,7 @@ class SliderSolver:
 # 通知模块
 notify = None
 try:
-    from notify import send
+    from ql_notify import send
     notify = send
 except ImportError:
     pass

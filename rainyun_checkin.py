@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 try:
-    from notify import send as notify_send
+    from ql_notify import send as notify_send
 except ImportError:
     notify_send = None
 

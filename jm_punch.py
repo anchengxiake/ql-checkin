@@ -24,7 +24,7 @@ random_signin = os.getenv("RANDOM_SIGNIN", "true").lower() == "true"
 # 尝试加载通知模块
 notify = None
 try:
-    from notify import send
+    from ql_notify import send
     notify = send
     logging.info("✅ 已加载 notify 通知模块")
 except ImportError:
