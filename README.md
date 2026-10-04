@@ -527,6 +527,7 @@ python -m py_compile laowang_sign_ql.py rainyun_checkin.py
 - 哔咔漫画、禁漫天堂脚本来源和维护参考：[forchannot/comic-auto-punch-in](https://github.com/forchannot/comic-auto-punch-in)
 - 夸克网盘脚本来源和维护参考：[anchengxiake/Quark_Auot_Check_In](https://github.com/anchengxiake/Quark_Auot_Check_In)
 - 移动云盘脚本来源和维护参考：[hlt1995/qlScripts](https://github.com/hlt1995/qlScripts)
+- 移动云盘任务协议（taskListV3 / 领取与抢兑）参考：[3238614968/caiyun](https://github.com/3238614968/caiyun)
 - 雨云签到、验证码识别和自动续费来源及维护参考：[LMTXQ/Rainyun-QingLong](https://github.com/LMTXQ/Rainyun-QingLong)
 
 ## 免责声明
