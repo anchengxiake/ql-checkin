@@ -26,7 +26,6 @@
 ql-checkin/
 ├── README.md                    # 项目说明
 ├── baiduwangpan_checkin.py       # 百度网盘签到
-├── ikuuu_checkin.py              # IKUUU 签到
 ├── jm_punch.py                   # 禁漫天堂签到
 ├── laowang_sign_ql.py            # 老王论坛青龙单文件版
 ├── mcloud.py                     # 移动云盘签到
@@ -133,7 +132,7 @@ numpy
 
 | 脚本 | Python3 依赖 |
 | --- | --- |
-| `baiduwangpan_checkin.py`、`ikuuu_checkin.py`、`pica_punch.py`、`quark_punch.py` | `requests` |
+| `baiduwangpan_checkin.py`、`pica_punch.py`、`quark_punch.py` | `requests` |
 | `jm_punch.py` | `jmcomic` |
 | `mcloud.py` | `requests`、`pycryptodome` |
 | `ty_netdisk_checkin.py` | `requests`、`rsa` |
@@ -183,7 +182,6 @@ task laowang_sign_ql.py
 | 百度网盘 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | `0 9 * * *` | Cookie 签到、成长任务 |
 | 天翼云盘 | `ty_netdisk_checkin.py` | `TY_USERNAME`, `TY_PASSWORD` | `1 16 * * *` | 账号密码签到 |
 | 移动云盘 | `mcloud.py` | `ydyp_ck` | `5 12 * * *` | Cookie 签到 |
-| IKUUU | `ikuuu_checkin.py` | `IKUUU_COOKIE` | `0 21 * * *` | 推荐 Cookie 签到，账号密码为备用 |
 | 雨云 | `rainyun_checkin.py` | `RAINYUN_ACCOUNT` | `0 9 * * *` | 单文件，支持验证码和可选自动续费 |
 | SouthPlus | `south.py` | `SOUTHPLUS_COOKIE` | `0 9 * * *` | 推荐 Cookie 模式 |
 | 老王论坛 | `laowang_sign_ql.py` | `LAOWANG_ACCOUNT` | `0 9 * * *` | 青龙推荐单文件版 |
@@ -194,9 +192,9 @@ task laowang_sign_ql.py
 
 | 变量名 | 说明 | 默认值 | 支持脚本 |
 | --- | --- | --- | --- |
-| `RANDOM_SIGNIN` | 是否启用随机延迟 | `true` | 百度、禁漫、哔咔、夸克、移动云盘、IKUUU、SouthPlus、老王论坛、天翼云盘 |
+| `RANDOM_SIGNIN` | 是否启用随机延迟 | `true` | 百度、禁漫、哔咔、夸克、移动云盘、SouthPlus、老王论坛、天翼云盘 |
 | `MAX_RANDOM_DELAY` | 最大随机延迟秒数 | `3600` | 老王论坛默认 `300`；雨云使用 `RAINYUN_CONFIG.max_delay`，单位为分钟 |
-| `PRIVACY_MODE` | 隐私保护模式 | `true` | 百度网盘、IKUUU |
+| `PRIVACY_MODE` | 隐私保护模式 | `true` | 百度网盘 |
 | `MY_PROXY` | HTTP/HTTPS 代理 | 空 | 禁漫、哔咔 |
 
 关闭随机延迟：
@@ -230,7 +228,7 @@ MAX_RANDOM_DELAY=0
 支持的前缀：
 
 ```text
-PICA、JM、QUARK、BAIDU、TY、MCLOUD、IKUUU、RAINYUN、SOUTHPLUS、LAOWANG
+PICA、JM、QUARK、BAIDU、TY、MCLOUD、RAINYUN、SOUTHPLUS、LAOWANG
 ```
 
 例如，只让雨云签到发送 Telegram，只让 SouthPlus 发送 PushPlus：
@@ -313,18 +311,6 @@ TY_PASSWORD=password1&password2
 ydyp_ck=Basic xxxxx#13812345678
 Basic yyyyy#13987654321
 ```
-
-### IKUUU
-
-| 变量名 | 是否必需 | 示例 | 备注 |
-| --- | --- | --- | --- |
-| `IKUUU_COOKIE` | 推荐 | `uid=xxx; email=xxx; key=xxx; ip=xxx; expire_in=xxx` | 浏览器登录后复制完整 Cookie，多账号用换行或 `&&` |
-| `IKUUU_EMAIL` | 备用 | `user1@example.com,user2@example.com` | 多账号英文逗号分隔，可能触发站点验证 |
-| `IKUUU_PASSWD` | 备用 | `password1,password2` | 与邮箱顺序一致 |
-| `IKUUU_BASE_URL` | 可选 | `https://ikuuu.win` | 域名变动时覆盖 |
-| `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
-| `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
-| `PRIVACY_MODE` | 可选 | `true` | 是否对邮箱等账号信息脱敏 |
 
 ### 雨云
 
@@ -537,7 +523,7 @@ python -m py_compile laowang_sign_ql.py rainyun_checkin.py
 
 本项目整理和维护过程中参考了多个优秀上游项目：
 
-- 天翼云盘、百度网盘、IKUUU 脚本来源和维护参考：[agluo/ql-script-hub](https://github.com/agluo/ql-script-hub)
+- 天翼云盘、百度网盘脚本来源和维护参考：[agluo/ql-script-hub](https://github.com/agluo/ql-script-hub)
 - 哔咔漫画、禁漫天堂脚本来源和维护参考：[forchannot/comic-auto-punch-in](https://github.com/forchannot/comic-auto-punch-in)
 - 夸克网盘脚本来源和维护参考：[anchengxiake/Quark_Auot_Check_In](https://github.com/anchengxiake/Quark_Auot_Check_In)
 - 移动云盘脚本来源和维护参考：[hlt1995/qlScripts](https://github.com/hlt1995/qlScripts)

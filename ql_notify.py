@@ -15,7 +15,6 @@ from typing import Any
 
 _PREFIX_BY_SCRIPT = {
     "baiduwangpan_checkin.py": "BAIDU",
-    "ikuuu_checkin.py": "IKUUU",
     "jm_punch.py": "JM",
     "laowang_sign_ql.py": "LAOWANG",
     "mcloud.py": "MCLOUD",
