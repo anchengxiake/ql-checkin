@@ -4,7 +4,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-移动云盘自动签到 v5.1.1
+移动云盘自动签到 v5.1.2
 
 包含以下功能:
 1. 每日自动签到 (签到/抽奖/摇一摇/新版云朵领取)
@@ -15,6 +15,10 @@
 更新说明:
 
 ### 20261004
+v5.1.2:
+- 摇一摇活动已下线（接口 404），改为先探测一次，不可用则跳过，不再产生 15 次重试刷屏。
+- 抽奖失败时打印接口返回的 code/msg（当前服务端返回 602 活动已结束）并停止后续抽奖。
+
 v5.1.1:
 - 修复上传/分享任务在云盘空间占满时报「资源配额不足(00010012)」的问题：占位文件改为 0 字节（空文件走秒传，不再占用空间）。
 - 创建云盘文件失败时打印接口返回的 code/message，不再只报「接口无响应」。
@@ -83,7 +87,7 @@ except ImportError:
     AES = None
     pad = None
 
-SCRIPT_VERSION = '5.1.1'
+SCRIPT_VERSION = '5.1.2'
 
 TOKEN_STORAGE_FILENAME = ''
 DEVICE_ID_STORAGE_FILENAME = ''
@@ -1960,20 +1964,34 @@ class YP:
 
     def shake(self):
         url = "https://caiyun.feixin.10086.cn:7071/market/shake-server/shake/shakeIt?flag=1"
-        successful_shakes = 0
 
+        # 摇一摇活动已下线，接口返回 404；先探测一次，避免 15 次请求 ×5 重试刷屏
         try:
-            for _ in range(self.click_num):
-                return_data = self.send_request(url = url, cookies = self.cookies, headers = self.jwtHeaders,
-                                                method = 'POST').json()
-                time.sleep(1)
-                shake_prize_config = return_data["result"].get("shakePrizeconfig")
+            probe = self.session.request('POST', url, cookies = self.cookies or None,
+                                         headers = dict(self.jwtHeaders or {}) or None)
+            probe.raise_for_status()
+        except requests.RequestException as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', '')
+            self.log(f'-摇一摇活动不可用(HTTP {status}), 已跳过')
+            return
 
-                if shake_prize_config:
-                    self.log(f"🎉摇一摇获得: {shake_prize_config['name']}")
-                    successful_shakes += 1
-        except Exception as e:
-            print(f'错误信息: {e}')
+        successful_shakes = 0
+        for _ in range(self.click_num):
+            response = self.send_request(url = url, cookies = self.cookies, headers = self.jwtHeaders,
+                                         method = 'POST')
+            if response is None:
+                break
+            time.sleep(1)
+            try:
+                return_data = response.json()
+            except ValueError:
+                break
+
+            shake_prize_config = (return_data.get("result") or {}).get("shakePrizeconfig")
+
+            if shake_prize_config:
+                self.log(f"🎉摇一摇获得: {shake_prize_config['name']}")
+                successful_shakes += 1
         if successful_shakes == 0:
             print(f'❌未摇中 x {self.click_num}')
 
@@ -1998,7 +2016,8 @@ class YP:
                         prize_name = draw_data["result"].get("prizeName", "")
                         self.log("✅抽奖成功，获得:" + prize_name)
                     else:
-                        print("❌抽奖失败")
+                        self.log(f"❌抽奖失败: code={draw_data.get('code')} msg={draw_data.get('msg')}")
+                        break
 
         else:
             self.log(f"抽奖查询失败: {draw_info_data.get('msg')}")
