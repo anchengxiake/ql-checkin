@@ -24,18 +24,21 @@
 
 ```text
 ql-checkin/
-├── README.md                    # 项目说明
+├── LICENSE                       # MIT 许可证
+├── README.md                     # 项目说明
 ├── baiduwangpan_checkin.py       # 百度网盘签到
 ├── jm_punch.py                   # 禁漫天堂签到
 ├── laowang_sign_ql.py            # 老王论坛青龙单文件版
 ├── mcloud.py                     # 移动云盘签到
 ├── pica_punch.py                 # 哔咔漫画签到
+├── ql_notify.py                  # 通知适配器：按脚本前缀分流后调用青龙 notify.py
 ├── quark_punch.py                # 夸克网盘签到
-├── rainyun_checkin.py             # 雨云签到及可选自动续费
+├── rainyun_checkin.py            # 雨云签到及可选自动续费
 ├── south.py                      # SouthPlus 任务
-├── ty_netdisk_checkin.py         # 天翼云盘签到
-└── ql_notify.py                  # 按脚本分流并调用青龙 notify.py
+└── ty_netdisk_checkin.py         # 天翼云盘签到
 ```
+
+仓库根目录只有上表中的脚本、说明和许可证文件，不含测试、调试或历史版本文件；订阅或下载后按下文配置环境变量即可运行。
 
 ## 快速开始
 
@@ -325,11 +328,13 @@ Basic yyyyy#13987654321
 | `RAINYUN_CHROME_PATH` | 可选 | `/usr/bin/chromium` | 自定义浏览器路径 |
 | `RAINYUN_DRIVER_PATH` | 可选 | `/usr/bin/chromedriver` | 自定义 ChromeDriver 路径 |
 | `RAINYUN_CAPTCHA_RETRY_LIMIT` | 可选 | `10` | 覆盖验证码重试次数，`-1` 为无限重试 |
-| `RAINYUN_TIMEOUT` | 可选 | `20` | 页面等待超时秒数 |
+| `RAINYUN_TIMEOUT` | 可选 | `20` | 页面等待超时秒数；实际页面加载上限为「该值 + 10」秒 |
 | `RAINYUN_KEEP_DEBUG_FILES` | 可选 | `false` | 保留验证码临时图片 |
 | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
 | `MAX_RANDOM_DELAY` | 可选 | `RAINYUN_CONFIG.max_delay * 60` | 覆盖随机延迟最大秒数，单位为秒 |
 | `RAINYUN_DEBUG` | 可选 | `false` | 输出调试日志 |
+
+如果日志出现 `timeout: Timed out receiving message from renderer`，说明雨云登录页没在时限内加载完（该页面会加载验证码等外部资源，配置较低的容器上常见）；把 `RAINYUN_TIMEOUT` 调到 `60` 即可，同时尽量避免把多个需要浏览器的脚本排在同一个 cron 时间点。
 
 账号数组参数：
 
@@ -502,23 +507,6 @@ DRISSIONPAGE_CHROME_PATH=/path/to/chrome
 
 Cookie 类脚本失败时，先在浏览器重新登录对应网站，再复制新的 Cookie/Token 到青龙环境变量。复制时保留完整字符串，不要额外添加引号。
 
-## 开发说明
-
-仓库中包含一些调试和历史文件：
-
-- `tests/`：滑块识别等测试用例。
-- `docs/`：开发设计记录。
-- `debug_*.py`、`diagnose_*.py`、`test_*.py`：本地排查用脚本。
-- `laowang_checkin*.py`：老版本或实验版本老王论坛脚本。
-- `laowang_sign.py`、`slider_solver.py`：老王论坛拆分开发版。
-- `laowang_sign_ql.py`：青龙单文件运行版。
-
-提交前建议至少做一次语法检查：
-
-```bash
-python -m py_compile laowang_sign_ql.py rainyun_checkin.py
-```
-
 ## 致谢
 
 本项目整理和维护过程中参考了多个优秀上游项目：
@@ -538,4 +526,4 @@ python -m py_compile laowang_sign_ql.py rainyun_checkin.py
 
 ## License
 
-请根据仓库实际许可证文件使用本项目。若重新发布或二次分发，请保留原作者和来源说明。
+本项目采用 [MIT License](LICENSE)。若重新发布或二次分发，请保留原作者和来源说明。
