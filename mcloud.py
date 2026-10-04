@@ -4,7 +4,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-移动云盘自动签到 v5.1.0
+移动云盘自动签到 v5.1.1
 
 包含以下功能:
 1. 每日自动签到 (签到/抽奖/摇一摇/新版云朵领取)
@@ -15,6 +15,10 @@
 更新说明:
 
 ### 20261004
+v5.1.1:
+- 修复上传/分享任务在云盘空间占满时报「资源配额不足(00010012)」的问题：占位文件改为 0 字节（空文件走秒传，不再占用空间）。
+- 创建云盘文件失败时打印接口返回的 code/message，不再只报「接口无响应」。
+
 v5.1.0:
 - 任务采集升级到 taskListV3：云朵中心(sign_in_3)与139邮箱(newsign_139mail)各一次请求返回全部任务。
 - taskListV2 与旧版邮箱任务接口保留为回退路径，V3 不可用时自动切回。
@@ -79,7 +83,7 @@ except ImportError:
     AES = None
     pad = None
 
-SCRIPT_VERSION = '5.1.0'
+SCRIPT_VERSION = '5.1.1'
 
 TOKEN_STORAGE_FILENAME = ''
 DEVICE_ID_STORAGE_FILENAME = ''
@@ -87,7 +91,9 @@ DEVICE_ID_STORAGE_FILENAME = ''
 # ⭐ 统一设备信息：iPhone 16 Pro + iOS 18_7 + 版本 12.5.4（抓包真实值）
 ua = ''
 market_ua = ''
-cloud_file_dummy_content = b'0'
+# 占位文件必须为 0 字节：云盘空间占满时，任何 size>0 的 create 都会返回
+# 「资源配额不足(00010012)」，而 0 字节空文件走秒传仍能创建成功。
+cloud_file_dummy_content = b''
 cloud_file_dummy_hash = hashlib.sha256(cloud_file_dummy_content).hexdigest()
 TOKEN_VALID_TIME = 21600000
 TOKEN_REFRESH_ADVANCE = 24 * 60 * 60 * 1000
@@ -899,6 +905,7 @@ class YP:
         except ValueError:
             return None
         if not res_json.get("success"):
+            self.log(f"-创建云盘文件失败: code={res_json.get('code')} message={res_json.get('message')}")
             return None
         data = res_json.get("data", {})
         return {
@@ -982,7 +989,7 @@ class YP:
     def complete_share_file_task(self, task):
         share_file = self.create_cloud_file('auto_share_')
         if not share_file:
-            self.log('分享文件失败: 创建临时文件失败')
+            self.log('分享文件失败: 创建云盘文件未成功')
             return None
         try:
             response = self.request_json('https://yun.139.com/orchestration/personalCloud-rebuild/outlink/v1.0/getOutLink',
@@ -1868,7 +1875,7 @@ class YP:
     def updata_file(self):
         upload_info = self.create_cloud_file('auto_upload_')
         if not upload_info:
-            self.log('-上传失败: 接口无响应')
+            self.log('-上传失败: 创建云盘文件未成功')
             return
         self.log(f"-上传文件成功，文件名: {upload_info.get('fileName', '')}")
         self.cleanup_uploaded_files(upload_info)
