@@ -4,7 +4,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-移动云盘自动签到 v5.0.5
+移动云盘自动签到 v5.1.0
 
 包含以下功能:
 1. 每日自动签到 (签到/抽奖/摇一摇/新版云朵领取)
@@ -13,6 +13,12 @@
 4. 临时文件智能清理与详细日志推送
 
 更新说明:
+
+### 20261004
+v5.1.0:
+- 任务采集升级到 taskListV3：云朵中心(sign_in_3)与139邮箱(newsign_139mail)各一次请求返回全部任务。
+- taskListV2 与旧版邮箱任务接口保留为回退路径，V3 不可用时自动切回。
+- 任务分组改用 V3 的 groupid 字段，沿用原有分组处理逻辑。
 
 ### 20260503
 v5.0.5:
@@ -47,7 +53,7 @@ pip3 install requests pycryptodome
 
 Author: YaoHuo8648
 Email: zheyizzf@188.com
-Update: 2026.05.03
+Update: 2026.10.04
 """
 
 import base64
@@ -73,7 +79,7 @@ except ImportError:
     AES = None
     pad = None
 
-SCRIPT_VERSION = '5.0.5'
+SCRIPT_VERSION = '5.1.0'
 
 TOKEN_STORAGE_FILENAME = ''
 DEVICE_ID_STORAGE_FILENAME = ''
@@ -90,6 +96,13 @@ REFRESH_TOKEN_AES_KEY = 'c7lXOigXahPnTViq'
 AI_TOOL_ACCOUNT_AES_KEY = 'xuL97!x7GGxG%8V4'
 AI_TOOL_ACCOUNT_AES_IV = '5OuCxk4XNu0NA*%x'
 TOKEN_EXPIRE_SECONDS_FALLBACK = 2592000
+
+# ⭐ 任务列表 V3：一次请求返回该渠道全部任务（result 为扁平数组，分组字段是 groupid）
+TASK_LIST_V3_PATH = '/ycloud/signin/task/taskListV3'
+TASK_LIST_V3_CLIENT_VERSION = '13.2.2'
+TASK_LIST_V3_SKIP_GROUPS = ('new', 'hidden', 'hiddenabc')
+# 邮箱渠道沿用旧版跳过清单（需真实收发邮件的任务无法自动完成）
+EMAIL_TASK_SKIP_IDS = (1004, 1005, 1015, 1020)
 
 err_accounts = ''  # 异常账号
 all_logs = ''      # 所有用户的详细运行日志 (原 err_message)
@@ -1264,7 +1277,86 @@ class YP:
             ('month', '\n📆 云盘每月任务'),
         ]
 
+    def request_tasklist_v3(self, market_name):
+        """请求 taskListV3，成功返回任务列表（扁平数组），失败返回 None。
+
+        V3 一次返回该渠道全部任务，分组在 groupid 字段；旧接口按 group 多次请求。
+        """
+        headers = self.build_receive_headers()
+        headers['activityId'] = market_name
+        headers['appVersion'] = f'{TASK_LIST_V3_CLIENT_VERSION}.0'
+        return_data = self.request_market_json(
+            f'{self.market_base_url}{TASK_LIST_V3_PATH}',
+            method="POST",
+            headers=headers,
+            data={
+                'marketname': market_name,
+                'client': 0,
+                'clientVersion': TASK_LIST_V3_CLIENT_VERSION,
+            })
+        if not return_data or str(return_data.get('code')) != '0':
+            return None
+        tasks = return_data.get('result')
+        if not isinstance(tasks, list):
+            return None
+        return tasks
+
+    def get_cloud_tasklist_v3(self):
+        """云朵中心任务采集（优先 taskListV3，不可用时回退 taskListV2）。"""
+        tasks = self.request_tasklist_v3('sign_in_3')
+        if tasks is None:
+            self.log('-taskListV3 不可用，回退 taskListV2')
+            self.get_cloud_tasklist_v2()
+            return
+        groups = {}
+        for task in tasks:
+            group = task.get('groupid') or task.get('group') or ''
+            groups.setdefault(group, []).append(task)
+        handled = set()
+        for group, title in self.get_cloud_task_groups():
+            handled.add(group)
+            group_tasks = groups.get(group) or []
+            if not group_tasks:
+                continue
+            self.log(title)
+            for task in group_tasks:
+                self.handle_cloud_v2_task(group, task)
+        for group, group_tasks in groups.items():
+            if group in handled or group in TASK_LIST_V3_SKIP_GROUPS:
+                continue
+            self.log(f'\n🗂 其他任务({group})')
+            for task in group_tasks:
+                self.handle_cloud_v2_task(group, task)
+        self.cleanup_uploaded_files()
+
+    def get_email_tasklist_v3(self):
+        """139邮箱任务采集（V3）；不可用时返回 False 交由旧接口处理。"""
+        tasks = self.request_tasklist_v3('newsign_139mail')
+        if tasks is None:
+            self.log('-邮箱 taskListV3 不可用，回退旧接口')
+            return False
+        self.log('\n📮 139邮箱任务')
+        for task in tasks:
+            group = task.get('groupid') or task.get('group') or ''
+            task_id = task.get('id')
+            if group != 'month' or task_id in EMAIL_TASK_SKIP_IDS:
+                continue
+            task_name = self.strip_task_name(task)
+            if task.get('state') == 'FINISH':
+                print(f'-已完成: {task_name}')
+                continue
+            self.log(f'-去完成: {task_name}')
+            self.do_task(task_id, task_type='month', app_type='email_app')
+            time.sleep(2)
+        return True
+
     def query_cloud_task(self, task_id, group='time'):
+        tasks = self.request_tasklist_v3('sign_in_3')
+        if tasks is not None:
+            for task in tasks:
+                if task.get('id') == task_id:
+                    return task
+            return None
         return_data = self.request_market_json(
             f'{self.market_base_url}/market/signin/task/taskListV2',
             method="POST",
@@ -1660,7 +1752,9 @@ class YP:
 
     def get_tasklist(self, url, app_type):
         if url == 'sign_in_3' and app_type == 'cloud_app':
-            self.get_cloud_tasklist_v2()
+            self.get_cloud_tasklist_v3()
+            return
+        if url == 'newsign_139mail' and app_type == 'email_app' and self.get_email_tasklist_v3():
             return
         url = f'https://caiyun.feixin.10086.cn/market/signin/task/taskList?marketname={url}'
         return_data = self.send_request(url, headers = self.jwtHeaders, cookies = self.cookies).json()
