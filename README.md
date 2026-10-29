@@ -181,7 +181,7 @@ task laowang_sign_ql.py
 | --- | --- | --- | --- | --- |
 | 哔咔漫画 | `pica_punch.py` | `PICA_ACCOUNT` | `30 8 * * *` | 支持自定义 API 地址和国内地址失败自动切换 |
 | 禁漫天堂 | `jm_punch.py` | `JM_ACCOUNT` | `35 8 * * *` | 依赖 `jmcomic` |
-| 夸克网盘 | `quark_punch.py` | `COOKIE_QUARK` | `13 8 * * *` | Cookie 签到 |
+| 夸克网盘 | `quark_punch.py` | `COOKIE_QUARK` | `13 8 * * *` | 支持参数与抓包 URL 两种格式，多账号逐个执行 |
 | 百度网盘 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | `0 9 * * *` | Cookie 签到、成长任务 |
 | 天翼云盘 | `ty_netdisk_checkin.py` | `TY_USERNAME`, `TY_PASSWORD` | `1 16 * * *` | 账号密码签到 |
 | 移动云盘 | `mcloud.py` | `ydyp_ck` | `5 12 * * *` | Cookie 签到 |
@@ -285,8 +285,10 @@ username2:password2
 | 脚本 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- | --- |
 | `quark_punch.py` | `COOKIE_QUARK` | 必需 | `kps=xxx; sign=xxx; vcode=xxx; user=xxx` | 多账号用换行或 `&&` |
+| `quark_punch.py` | `COOKIE_QUARK` | 必需 | `user=xxx; url=https://drive-m.quark.cn/...` | 也可直接粘贴抓包完整 URL，脚本自动提取 `kps/sign/vcode` |
 | `quark_punch.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
 | `quark_punch.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
+| `quark_punch.py` | `QUARK_DRY_RUN` | 可选 | `false` | 设为 `true` 时只校验凭证与签到状态，不提交签到 |
 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | 必需 | `BDUSS=xxx; STOKEN=xxx` | 多账号换行 |
 | `baiduwangpan_checkin.py` | `RANDOM_SIGNIN` | 可选 | `true` | 是否启用随机延迟 |
 | `baiduwangpan_checkin.py` | `MAX_RANDOM_DELAY` | 可选 | `3600` | 随机延迟最大秒数 |
@@ -304,7 +306,11 @@ username2:password2
 示例：
 
 ```bash
-COOKIE_QUARK=cookie1&&cookie2
+# 夸克：单个账号
+COOKIE_QUARK=user=账号一; kps=xxx; sign=xxx; vcode=xxx;
+
+# 夸克：直接粘贴抓包 URL，多账号用换行或 && 分隔
+COOKIE_QUARK=user=账号一; url=https://drive-m.quark.cn/1/clouddrive/act/growth/reward?...;&&user=账号二; url=https://...
 
 BAIDU_COOKIE=BDUSS=xxx; STOKEN=xxx
 
@@ -447,9 +453,14 @@ user2:p@ss:word2
 
 ### 夸克网盘 Cookie
 
-1. 浏览器访问 [夸克网盘](https://pan.quark.cn/) 并登录。
-2. 打开开发者工具 `F12`，进入 `Network`。
-3. 刷新页面，复制请求头里的完整 `Cookie`。
+`COOKIE_QUARK` 实际是签到接口的 `kps`/`sign`/`vcode` 三个参数，不是浏览器里的整套 Cookie。新版夸克 App 对用户证书校验较严，推荐用 **MuMu 模拟器（开 Root）+ ProxyPin** 把 CA 证书装成 Android 系统证书后抓包：
+
+1. 打开夸克网盘的签到页，在 ProxyPin 中筛选域名 `drive-m.quark.cn`。
+2. 找到 `https://drive-m.quark.cn/1/clouddrive/act/growth/reward?...` 这类请求。
+3. **原样复制完整 URL**，按 `user=昵称; url=完整URL;` 填入 `COOKIE_QUARK`；脚本会自动提取三个参数，并保留 URL 中的字面量 `+`（不能手动把 `+` 改成空格或 `%2B`）。
+4. 也可以在请求中手动抄出 `kps`、`sign`、`vcode`，按 `user=昵称; kps=xxx; sign=xxx; vcode=xxx;` 填写。
+
+参数有效期大约两个月，签到提示「缺少必要参数」或「凭证失效」时重新抓包即可。
 
 ### 百度网盘 Cookie
 
