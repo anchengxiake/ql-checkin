@@ -17,7 +17,7 @@
 | `mcloud.py` | 移动云盘签到、云朵任务 | `ydyp_ck` | `requests`、`pycryptodome` | `5 12 * * *` |
 | `quark_punch.py` | 夸克网盘签到 | `COOKIE_QUARK` | `requests` | `13 8 * * *` |
 | `pica_punch.py` | 哔咔漫画签到 | `PICA_ACCOUNT` | `requests` | `30 8 * * *` |
-| `jm_punch.py` | 禁漫天堂签到 | `JM_ACCOUNT` | `jmcomic` | `35 8 * * *` |
+| `jm_punch.py` | 禁漫天堂签到 | `JM_ACCOUNT` | `jmcomic` | `30 8 * * *` |
 | `south.py` | SouthPlus 每日任务 | `SOUTHPLUS_COOKIE` | `DrissionPage`；账号密码模式还需 `ddddocr`、`Pillow` | `0 9 * * *` |
 | `laowang_sign_ql.py` | 老王论坛签到 | `LAOWANG_ACCOUNT` | `DrissionPage`、`ddddocr`、`python-dotenv`，滑块增强识别另需 `opencv-python-headless`、`numpy` | `0 9 * * *` |
 | `rainyun_checkin.py` | 雨云签到、可选自动续费 | `RAINYUN_ACCOUNT` | `requests`、`selenium`、`ddddocr`、`opencv-python-headless` | `0 9 * * *` |
@@ -89,7 +89,7 @@ task laowang_sign_ql.py
 | 变量名 | 说明 | 默认值 | 生效脚本 |
 | --- | --- | --- | --- |
 | `RANDOM_SIGNIN` | 是否在任务开始时随机延迟 | `true` | 全部脚本 |
-| `MAX_RANDOM_DELAY` | 随机延迟上限（秒） | `3600` | 老王论坛默认 `300`；雨云默认取 `RAINYUN_CONFIG.max_delay × 60` |
+| `MAX_RANDOM_DELAY` | 随机延迟上限（秒） | `3600` | 全部脚本；老王论坛默认 `300`，雨云未设置时取 `RAINYUN_CONFIG.max_delay × 60` |
 | `PRIVACY_MODE` | 日志中对账号信息脱敏 | `true` | 百度网盘 |
 | `MY_PROXY` | HTTP/HTTPS 代理 | 空 | 禁漫、哔咔 |
 
@@ -124,7 +124,7 @@ username2:password2
 | 脚本 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- | --- |
 | `quark_punch.py` | `COOKIE_QUARK` | 必需 | `user=张三; url=https://drive-m.quark.cn/...` | 抓包 URL 或参数两种格式，多账号用换行或 `&&` |
-| `quark_punch.py` | `QUARK_DRY_RUN` | 可选 | `false` | 设为 `true` 只校验凭证与签到状态，不提交签到 |
+| `quark_punch.py` | `QUARK_DRY_RUN` | 可选 | `false` | 设为 `true` 只校验凭证与签到状态，不提交签到；也接受 `DRY_RUN` |
 | `baiduwangpan_checkin.py` | `BAIDU_COOKIE` | 必需 | `BDUSS=xxx; STOKEN=xxx` | 多账号用换行 |
 | `ty_netdisk_checkin.py` | `TY_USERNAME` | 必需 | `13812345678` | 多账号用换行或 `&` |
 | `ty_netdisk_checkin.py` | `TY_PASSWORD` | 必需 | `password` | 与账号顺序一一对应 |
@@ -234,7 +234,7 @@ task laowang_sign_ql.py
 
 | 变量名 | 是否必需 | 示例 | 备注 |
 | --- | --- | --- | --- |
-| `LAOWANG_ACCOUNT` | 必需 | `username:password` | 多账号用换行；密码含 `&` 时不要用 `&` 分隔 |
+| `LAOWANG_ACCOUNT` | 必需 | `username:password` | 多账号优先用换行；密码含 `&` 或 `:` 时用换行，`&` 分隔可能被误判 |
 | `LAOWANG_CUSTOM_HOST` | 可选 | `104.21.14.105` | DNS 异常时指定 IP |
 | `LAOWANG_CF_WAIT` | 可选 | `60` | Cloudflare 等待秒数 |
 | `LAOWANG_SLIDER_RETRY_LIMIT` | 可选 | `8` | 滑块最大尝试次数 |
