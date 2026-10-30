@@ -4,7 +4,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-移动云盘自动签到 v5.1.2
+移动云盘自动签到 v5.1.3
 
 包含以下功能:
 1. 每日自动签到 (签到/抽奖/摇一摇/新版云朵领取)
@@ -13,6 +13,14 @@
 4. 临时文件智能清理与详细日志推送
 
 更新说明:
+
+### 20261030
+v5.1.3:
+- 修复 JWT 获取全部失败的问题：旧的 `/portal/auth/tyrzLogin.action` 已被服务端下线（任何 host、任何参数都 404），
+  改成 `m.mcloud.139.com` 的 ycloud 网关 `/ycloud/auth-service/auth/tyrzLogin`，并补上网关要求的签名头
+  （`x-request-id` / `x-timestamp` / `x-nonce` / `x-signature`，签名 = md5(SALT + requestId + ts + nonce + params + SALT)）。
+- ssoToken 获取方式不变（`orches.yun.139.com` 那个接口仍可用），只换 JWT 这一步。
+- 若之后网关再次改路径，只需改 `MARKET_JWT_URL` 一个常量。
 
 ### 20261004
 v5.1.2:
@@ -87,7 +95,7 @@ except ImportError:
     AES = None
     pad = None
 
-SCRIPT_VERSION = '5.1.2'
+SCRIPT_VERSION = '5.1.3'
 
 TOKEN_STORAGE_FILENAME = ''
 DEVICE_ID_STORAGE_FILENAME = ''
@@ -113,6 +121,32 @@ TASK_LIST_V3_CLIENT_VERSION = '13.2.2'
 TASK_LIST_V3_SKIP_GROUPS = ('new', 'hidden', 'hiddenabc')
 # 邮箱渠道沿用旧版跳过清单（需真实收发邮件的任务无法自动完成）
 EMAIL_TASK_SKIP_IDS = (1004, 1005, 1015, 1020)
+
+# ⭐ JWT 获取（2026-10 起）：旧的 /portal/auth/tyrzLogin.action 已被服务端下线（任何 host 都 404），
+# 改成 m.mcloud.139.com 的 ycloud 网关，且必须带网关签名头。
+# 签名算法：md5(SALT + requestId + timestamp + nonce + params串 + SALT)，params串这里传空。
+MARKET_JWT_URL = '/ycloud/auth-service/auth/tyrzLogin'
+MARKET_JWT_SALT = 'sekaMdYYLIZfbCfm'
+MARKET_JWT_MARKET_NAME = 'sign_in_3'
+MARKET_JWT_SOURCE_ID = '001005'
+# 网关校验 UA 与 app 版本，空 UA 会被拒
+MARKET_APP_UA = ('Mozilla/5.0 (Linux; Android 13; 23049RAD8C Build/TKQ1.221114.001; wv) '
+                 'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 '
+                 'Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN')
+
+
+def build_market_sign_headers(params_str=''):
+    """ycloud 网关签名头。缺了会被 401/拒绝，返回体不会有 result.token。"""
+    request_id = str(uuid.uuid4())
+    nonce = str(uuid.uuid4())
+    timestamp = str(int(time.time() * 1000))
+    raw = MARKET_JWT_SALT + request_id + timestamp + nonce + params_str + MARKET_JWT_SALT
+    return {
+        'x-request-id': request_id,
+        'x-timestamp': timestamp,
+        'x-nonce': nonce,
+        'x-signature': hashlib.md5(raw.encode('utf-8')).hexdigest(),
+    }
 
 err_accounts = ''  # 异常账号
 all_logs = ''      # 所有用户的详细运行日志 (原 err_message)
@@ -1651,27 +1685,28 @@ class YP:
             self.refresh_authorization_token(force = True)
             token = self.sso()
         if token is not None:
-            jwt_url = f"https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken={token}"
-            jwt_data = self.request_json(jwt_url, headers = self.jwtHeaders, method = 'POST')
-            if not jwt_data:
+            jwt_data = self.request_market_jwt(token)
+            if jwt_data is None:
                 self.log('JWT获取失败: 接口无响应')
                 return False
-            if jwt_data['code'] != 0:
+            if jwt_data.get('code') != 0:
                 self.log('-尝试强制刷新Authorization后重新获取JWT')
                 self.refresh_authorization_token(force = True)
                 token = self.sso()
                 if token is None:
                     self.log('-ck可能失效了')
                     return False
-                jwt_url = f"https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken={token}"
-                jwt_data = self.request_json(jwt_url, headers = self.jwtHeaders, method = 'POST')
-                if not jwt_data:
+                jwt_data = self.request_market_jwt(token)
+                if jwt_data is None:
                     self.log('JWT获取失败: 接口无响应')
                     return False
-            if jwt_data['code'] != 0:
-                self.log(f"JWT获取失败: {jwt_data['msg']}")
+            if jwt_data.get('code') != 0:
+                self.log(f"JWT获取失败: {jwt_data.get('msg', '未知错误')}")
                 return False
-            jwt_token = jwt_data['result']['token']
+            jwt_token = (jwt_data.get('result') or {}).get('token')
+            if not jwt_token:
+                self.log('JWT获取失败: 响应缺少 token')
+                return False
             self.jwtHeaders['jwtToken'] = jwt_token
             self.cookies['jwtToken'] = jwt_token
             self.build_market_context(jwt_token)
@@ -1680,6 +1715,32 @@ class YP:
         else:
             self.log('-ck可能失效了')
             return False
+
+    def request_market_jwt(self, sso_token):
+        """用 ssoToken 换 jwtToken（2026-10 新链路：ycloud 网关 + 签名头）。
+
+        旧接口 /portal/auth/tyrzLogin.action 已下线（404），不要再回退到它。
+        """
+        url = f'{self.market_base_url}{MARKET_JWT_URL}'
+        headers = {
+            'User-Agent': MARKET_APP_UA,
+            'Accept': '*/*',
+            'Content-Type': 'application/json;charset=UTF-8',
+            'type': 'signupPlatform',
+            'Origin': self.market_base_url,
+            'Referer': f'{self.market_base_url}/portal/newsignin/index.html',
+        }
+        device_id = self.market_device_id or self.init_device_id
+        if device_id:
+            headers['deviceId'] = device_id
+        headers.update(build_market_sign_headers(''))
+        payload = {
+            'token': sso_token,
+            'openAccount': False,
+            'marketName': MARKET_JWT_MARKET_NAME,
+            'sourceId': MARKET_JWT_SOURCE_ID,
+        }
+        return self.request_json(url, headers = headers, data = payload, method = 'POST')
 
     @catch_errors
     def signin_status(self):
